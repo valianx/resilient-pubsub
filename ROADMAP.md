@@ -15,6 +15,21 @@ decisions are not lost.
 
 ## v0.2 backlog (post v0.1)
 
+- **Dead-letter startup preflight.** For subscribers that opt into dead-letter
+  handling, validate at startup that `deadLetterPolicy` is set and that the
+  required IAM grants exist (the Pub/Sub service account needs `pubsub.publisher`
+  on the dead-letter topic and `pubsub.subscriber` on the source subscription),
+  failing loudly on misconfiguration. The preflight runs only for subscribers
+  that opted in — projects that do not use dead-letter pay no cost. This
+  *validates*, it does not *provision* (provisioning stays a non-goal). v0.1
+  ships the native `deadLetterPolicy` pass-through and documents the
+  requirements; the preflight lands here.
+- **Transactional `IdempotencyStore` adapter** (e.g., Postgres). Lets the
+  deduplication mark and the side effect commit in the same transaction, closing
+  the two-phase gap described in `docs/VISION.md` § "Idempotency: an honest
+  contract". This is the path to a true exactly-once guarantee for
+  non-idempotent sinks; the v0.1 Redis store reduces duplicates but cannot make
+  the mark and a separate effect atomic.
 - **App-level DLQ** (`deadLetter: { mode: 'app', topic }`): republish the
   envelope to a dead-letter topic with redacted error metadata (no secrets/PII;
   raw body only with explicit opt-in). v0.1 ships native `deadLetterPolicy`
