@@ -15,6 +15,20 @@ decisions are not lost.
 
 ## v0.2 backlog (post v0.1)
 
+- **Optional `IdempotencyStore` deduplication tool (Redis).** v0.1 deliberately
+  ships without a built-in dedup store: Pub/Sub's ack/nack lifecycle already
+  gives "fails → repeats", and deduplicating business effects is the
+  application's responsibility (see `docs/VISION.md` § "Idempotency is a shared
+  responsibility"). A dedup store helps only in a narrow case — a non-idempotent
+  effect that cannot be made idempotent, running across multiple instances (e.g.
+  sending an email, calling a non-idempotent third-party API). For those teams,
+  v0.2 adds an **optional** `IdempotencyStore` interface with an in-memory
+  implementation (single-instance / tests) and a Redis implementation
+  (multi-instance). Its limits will be documented plainly: it *reduces* duplicate
+  handler executions; it does not eliminate them (the mark and the effect live in
+  separate systems and cannot commit atomically), and it is never sold as
+  exactly-once. Redis would become the only new optional peer — no other
+  dependency is added.
 - **Dead-letter startup preflight.** For subscribers that opt into dead-letter
   handling, validate at startup that `deadLetterPolicy` is set and that the
   required IAM grants exist (the Pub/Sub service account needs `pubsub.publisher`
@@ -24,15 +38,12 @@ decisions are not lost.
   *validates*, it does not *provision* (provisioning stays a non-goal). v0.1
   ships the native `deadLetterPolicy` pass-through and documents the
   requirements; the preflight lands here.
-- **Transactional `IdempotencyStore` adapter** (e.g., Postgres). Lets the
-  deduplication mark and the side effect commit in the same transaction, closing
-  the two-phase gap described in `docs/VISION.md` § "Idempotency: an honest
-  contract". This is the path to a true exactly-once guarantee for
-  non-idempotent sinks; the v0.1 Redis store reduces duplicates but cannot make
-  the mark and a separate effect atomic.
 - **App-level DLQ** (`deadLetter: { mode: 'app', topic }`): republish the
   envelope to a dead-letter topic with redacted error metadata (no secrets/PII;
   raw body only with explicit opt-in). v0.1 ships native `deadLetterPolicy`
   pass-through only.
-- **Advanced exactly-once *processing*** beyond deterministic idempotency-based
-  deduplication.
+- **Turnkey OpenTelemetry bridge (optional).** v0.1 already propagates W3C trace
+  context across the publisher → consumer hop and exposes neutral observability
+  hooks, with no SDK dependency. v0.2 may add an *optional* bridge that creates
+  spans automatically via `@opentelemetry/api` (an optional peer) for teams that
+  want it turnkey — the core stays dependency-free and backend-neutral.

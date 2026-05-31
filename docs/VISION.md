@@ -6,135 +6,119 @@
 ## The problem
 
 Google Cloud Pub/Sub gives you a reliable transport, but it deliberately leaves
-the hard correctness problems to the application:
+several correctness and ergonomics problems to the application:
 
-- **Delivery is at-least-once.** Every subscriber *will* eventually see a
-  duplicate. Exactly-once *delivery* is available per-subscription, but it is not
-  exactly-once *processing*: a crash between "side effect applied" and "ack
-  confirmed" still re-applies the effect. The application needs a deduplication
-  strategy — and, crucially, that strategy has limits of its own (see
-  [Idempotency: an honest contract](#idempotency-an-honest-contract)).
-- **Retries, backoff, and jitter are your job.** The raw client surfaces gRPC
-  errors; deciding what is transient, how long to wait, and how to avoid a
-  thundering herd is left to the caller.
+- **Publish can fail transiently.** The raw client surfaces gRPC errors; deciding
+  what is transient, how long to wait, and how to avoid a thundering herd is left
+  to the caller. Done wrong, you either drop events or hammer a struggling
+  backend.
+- **The ack/nack lifecycle is easy to get subtly wrong.** Pub/Sub's delivery
+  contract is simple — `ack()` means "done, do not redeliver"; a failure (nack or
+  timeout) means "redeliver and retry" — but wiring a handler so that a thrown
+  error reliably becomes a nack, and a success reliably becomes an ack, with the
+  ack deadline extended while a slow handler is still running, is repetitive
+  boilerplate that every project re-implements.
 - **Poison messages need a policy.** Native dead-letter topics exist, but wiring
   `deadLetterPolicy`, the IAM grants, and the delivery-attempt accounting is
   manual and easy to get subtly wrong — and a misconfiguration fails silently,
   surfacing only when a poison message loops forever in production.
-- **Long processing fights the ack deadline.** If a handler runs longer than the
-  ack deadline, Pub/Sub redelivers the message *while it is still being
-  processed*. Without deadline extension, deduplication becomes the only thing
-  standing between you and a double-effect.
+- **Context is lost at the hop.** When service A publishes a message and service
+  B consumes it, the trace context and any business headers do not travel unless
+  you manually marshal them through message attributes on both sides. The thread
+  of "what request caused this" breaks at the topic.
 - **Message shape is unstructured.** Attributes are a flat string map and the
   body is raw bytes. Teams reinvent an envelope, a content-type convention, and a
   schema-version marker on every project.
 
 `resilient-pubsub` closes these gaps **without taking the transport away from
-you**, and it is explicit about the gaps it can only *narrow* rather than close.
+you**, and it is explicit about the things it deliberately leaves to the
+application (see [What this library does not do](#what-this-library-does-not-do)).
+
+## The core model: ack means done, no-ack means retry
+
+The entire library is built on Pub/Sub's own delivery contract, not on top of a
+heavier guarantee:
+
+> **A handler that succeeds gets `ack()` — the work is finished.
+> A handler that fails gets `nack()` — Pub/Sub redelivers and it runs again.**
+
+That is the spine. Everything else (retry on publish, dead-letter on repeated
+failure, context propagation, observability) hangs off it. The library does not
+try to invent exactly-once processing or hide the at-least-once nature of
+Pub/Sub — it makes the at-least-once lifecycle correct, observable, and
+ergonomic, and it is honest that **deduplication of business effects is the
+application's responsibility** (see below).
 
 ## What this library is
 
 A transparent, framework-agnostic resilience layer that wraps the official
-`@google-cloud/pubsub` client and adds:
+`@google-cloud/pubsub` client and adds, in v0.1:
 
-1. **Idempotency** — deduplication of message processing through a pluggable
-   `IdempotencyStore`, with a `claim → effect → commit` lifecycle and a leased
-   in-progress marker. Redis is the preferred backing store; the interface is
-   storage-agnostic; an in-memory store ships for tests and single-instance use.
-   The guarantee it provides — and the assumptions it requires — are stated
-   precisely below.
-2. **Structured envelopes** — a typed `Envelope<T>` plus a pluggable
+1. **Resilient publishing** — retry with backoff and jitter (exponential /
+   linear / constant backoff; full / equal / decorrelated / none jitter), and
+   **ordering-aware** publishing: when ordering keys are enabled, the publisher
+   preserves per-key order and resumes after a failure (`resumePublishing`)
+   instead of silently reordering. The heavy lifting is the native client's; the
+   library just exposes the option and handles resume correctly.
+2. **A correct subscriber lifecycle** — a handler that throws becomes a `nack`
+   (redelivery); a handler that resolves becomes an `ack`. Flow control
+   (`maxOutstandingMessages` / `maxOutstandingBytes`) is documented pass-through,
+   and the ack deadline is extended automatically while a slow handler is still
+   running, so long processing does not trigger premature redelivery.
+3. **Structured envelopes** — a typed `Envelope<T>` plus a pluggable
    `Serializer<T>` (JSON by default), with content-type and schema-version
    carried in attributes.
-3. **Retries** — backoff and jitter primitives (exponential / linear / constant
-   backoff; full / equal / decorrelated / none jitter) for both publish and
-   subscriber processing.
-4. **Ordering-aware publishing** — when ordering keys are enabled, the publisher
-   preserves per-key order across retries and resumes publishing after a failure
-   (`resumePublishing`) instead of silently reordering.
-5. **Flow control and ack-deadline management** — `maxOutstandingMessages` /
-   `maxOutstandingBytes` as documented pass-through, plus automatic ack-deadline
-   extension while a handler is still running, so long processing does not
-   trigger premature redelivery.
-6. **Dead-letter handling** — native `deadLetterPolicy` pass-through. Dead-letter
-   support is **opt-in**: a subscriber that does not configure it pays no cost
-   and runs no checks. The `delivery_attempt` count is surfaced on the envelope.
-7. **First-class observability** — lifecycle hooks for retries, deduplication
-   hits/misses, dead-letter routing, and poison detection, plus an
-   OpenTelemetry-compatible seam. For a resilience library, this is part of the
-   value, not an add-on.
-8. **A safe, standardized error surface** — `ResilientPubSubError` with explicit
+4. **Context and header propagation across the hop** — on publish, the library
+   writes the inbound trace context (W3C `traceparent` / `tracestate` /
+   `baggage`) and any caller-provided business headers into the message
+   attributes; on consume, it extracts them and exposes them to the handler. The
+   trace and the headers survive the publisher → message → consumer hop. This is
+   pure string marshalling following the W3C standard — **zero dependencies, no
+   OpenTelemetry SDK required**.
+5. **Dead-letter handling** — native `deadLetterPolicy` pass-through. Dead-letter
+   support is **opt-in**: a subscriber that does not configure it pays no cost and
+   runs no checks. The `delivery_attempt` count is surfaced on the envelope.
+6. **Neutral observability hooks** — lifecycle callbacks for publish retries,
+   nacks, dead-letter routing, and poison detection. The hooks are
+   dependency-free; anyone can wire them to OpenTelemetry, a logger, or metrics.
+   The library transports trace context (point 4) but does not create spans
+   itself.
+7. **A safe, standardized error surface** — `ResilientPubSubError` with explicit
    kinds and a `toJSON()` that never leaks secrets or PII by default.
 
-## Idempotency: an honest contract
+## Idempotency is a shared responsibility (and mostly the application's)
 
-This is the most important section of this document, because it is the easiest
-promise to overstate.
+This section exists so no one is misled in production.
 
-A generic `IdempotencyStore` does **not**, by itself, give you exactly-once
-processing. It moves the at-least-once problem; it does not erase it. The reason
-is a two-phase gap: the deduplication mark and the side effect usually live in
-**different systems** (the mark in Redis, the effect in Postgres or a remote
-API), and there is no atomic commit across the two.
+Pub/Sub is **at-least-once**: a handler that succeeded but whose `ack` was lost
+(crash, network, or an expired ack deadline) will be **redelivered and run
+again**; and near the ack deadline the same message can be delivered to two
+workers at once. The library makes the *lifecycle* correct — failure reliably
+repeats, success reliably acks — but it **cannot make a non-idempotent business
+effect safe to run twice**. That is the application's job, because only the
+application knows what a duplicate means for its domain.
 
-There are four distinct hazards, and the library addresses them differently:
+The honest division of labour:
 
-1. **Concurrent duplicate delivery** (two workers, same message, same instant).
-   *Solved.* `claim()` is a single-round-trip atomic compare-and-set
-   (Redis `SET key value NX PX <ttl>`). Exactly one worker wins (`claimed`); the
-   others observe `in-progress` and nack. A read-then-write check would
-   reintroduce the race — the store contract therefore requires atomicity.
-2. **Claim then crash → key locked forever.** *Solved, with a trade-off.* The
-   in-progress marker is a **lease with a TTL**. On expiry the key becomes
-   reclaimable, so a dead worker does not poison the key permanently.
-3. **Lease expiry vs ack deadline vs slow processing.** *Mitigated, not
-   eliminated.* If the effect outlives the lease, a second worker can reclaim and
-   process concurrently → a duplicate. The library mitigates this by extending
-   the ack deadline while the handler runs and by recommending a lease TTL
-   greater than the maximum expected processing time. It cannot make slow
-   processing free.
-4. **The two-phase commit gap (effect vs mark).** *Narrowed, not closed, in the
-   general case.* Mark-before-effect plus a crash loses the effect;
-   effect-before-mark plus a crash duplicates it. The `claim → effect → commit`
-   lifecycle shrinks the duplicate window but does not remove it when the mark
-   and the effect live in separate stores.
+- **The library guarantees** the ack/nack contract: a failed handler is retried,
+  a succeeded handler is acked, slow handlers keep their lease via deadline
+  extension, and repeated poison failures route to the dead-letter topic.
+- **The application is responsible** for making its effects tolerate
+  at-least-once delivery — typically by making the effect idempotent
+  (deterministic keys, upserts/`PUT`, "insert if not exists") so that a
+  redelivery reproduces the same result instead of a double effect.
 
-**The contract, stated plainly:**
-
-> `resilient-pubsub` delivers **idempotent processing** when *either* (a) the
-> deduplication mark and the side effect commit atomically in the same
-> transactional store, *or* (b) the side effect is naturally idempotent in its
-> sink. When neither holds — for example, a Redis dedup mark guarding a
-> non-idempotent effect in a separate system — the library **reduces duplicate
-> processing to a small window; it does not eliminate it.** It never silently
-> claims exactly-once.
-
-To let users reach the strong guarantee, the library offers two paths:
-
-- **A transactional store adapter** so `claim`/`commit` can live in the same
-  store as the side effect (e.g., a Postgres-backed store committing in the same
-  transaction as the business write). *(Planned — see `ROADMAP.md`.)*
-- **Guidance and helpers for idempotent sinks** (deterministic keys, upserts),
-  so the effect itself absorbs duplicates.
-
-### Deduplication key lifecycle (a design decision, not an implementation detail)
-
-Because the key lifecycle directly affects the guarantee, it is part of the
-vision:
-
-- **Deduplication window.** A committed key is retained for a configurable TTL.
-  Two deliveries of the same key *within* the window are deduplicated; deliveries
-  *after* the window are treated as new. The window is a deliberate trade-off
-  between memory and how far apart redeliveries can be safely caught — there is
-  no infinite-memory exactly-once.
-- **In-progress lease.** The pre-commit marker has its own (shorter) TTL, tuned
-  to exceed the maximum expected processing time; see hazard 3 above.
-- **Store eviction.** With Redis as the store, eviction policy matters: if keys
-  can be evicted under memory pressure (`allkeys-lru` and similar), the dedup
-  guarantee weakens silently. The library documents that the dedup keyspace
-  should use a `noeviction` (or `volatile-ttl`) policy, or a dedicated instance,
-  and surfaces an observability signal when a claim does not find a prior key it
-  expected.
+**Why there is no built-in deduplication store in v0.1.** A generic dedup store
+(e.g., a Redis "already processed" marker) helps in exactly one narrow case: the
+effect is **not** idempotent, **cannot** be made idempotent, and runs across
+**multiple instances** (for example, sending an email or calling a non-idempotent
+third-party API). Even then it only *reduces* duplicates — it does not eliminate
+them, because the mark and the effect live in separate systems and cannot commit
+atomically. For the common cases (idempotent effects, single instance) it adds a
+dependency and operational burden for little gain. So v0.1 ships **without** a
+dedup store, and an **optional** `IdempotencyStore` tool is deferred to the
+roadmap for the teams that genuinely hit that narrow case — with its limits
+documented plainly, never sold as exactly-once.
 
 ## Dead-letter handling: opt-in, with a v0.2 preflight
 
@@ -161,69 +145,76 @@ These are inherited directly from `resilient-http`, the sibling library.
 - **Transparent, never a black box.** The library wraps the official client; it
   does not hide it. Advanced users can always reach the underlying `Topic`,
   `Subscription`, and `Message` for cases the wrapper does not cover.
-- **Security-first, in every sense.** Secrets (GCP key paths, Redis URLs with
-  credentials) and PII are redacted from error output by default. The message
-  body is never serialized into error JSON unless explicitly opted in.
-  Supply-chain hygiene is part of the contract: GitHub Actions pinned by commit
-  SHA, dependency review, and provenance on publish.
+- **No dependency creep.** The only runtime peers the library will ever assume
+  are `@google-cloud/pubsub` (required) and, if and when the deferred dedup tool
+  lands, a Redis client (optional). No other dependency is added unless it is
+  strictly required and there is no alternative. In particular, observability is
+  achieved through neutral hooks and W3C-standard string propagation — **no
+  OpenTelemetry SDK dependency**.
+- **Security-first, in every sense.** Secrets (GCP key paths, and — if the dedup
+  tool lands — Redis URLs with credentials) and PII are redacted from error
+  output by default. The message body is never serialized into error JSON unless
+  explicitly opted in. Supply-chain hygiene is part of the contract: GitHub
+  Actions pinned by commit SHA, dependency review, and provenance on publish.
 - **Honest guarantees over marketing.** The library states what it can and
-  cannot guarantee (see the idempotency contract). It would rather under-promise
-  and be trusted by senior operators than over-promise and burn credibility in
+  cannot guarantee — it makes the at-least-once lifecycle correct and observable,
+  and it never claims exactly-once processing. It would rather under-promise and
+  be trusted by senior operators than over-promise and burn credibility in
   production.
-- **Minimal dependency footprint.** The **core** (backoff, jitter, envelope,
-  errors) has **zero runtime dependencies** and is tree-shakeable.
-  `@google-cloud/pubsub` is a **required peer**; the Redis client is an
-  **optional peer**. The accurate phrasing is "zero runtime dependencies in the
-  core, with explicit peers" — never a bare "zero-dependency" claim, which would
-  be misleading. The backoff/jitter core is reimplemented here, not imported from
-  `resilient-http` — these are independent libraries.
+- **Zero runtime dependencies in the core.** The core (backoff, jitter, envelope,
+  errors, propagation) has **zero runtime dependencies** and is tree-shakeable.
+  The accurate phrasing is "zero runtime dependencies in the core, with explicit
+  peers" — never a bare "zero-dependency" claim. The backoff/jitter core is
+  reimplemented here, not imported from `resilient-http` — these are independent
+  libraries.
 - **Correctness over convenience.** Defaults are safe. When a trade-off exists
   between an easy default and a correct one, the library chooses correct and
   documents the knob.
 
-## Non-goals
+## What this library does not do
 
 - It is **not** a message broker or a Pub/Sub replacement.
-- It does **not** abstract away Google Cloud Pub/Sub behind a generic
-  multi-broker interface. It is Pub/Sub-specific on purpose.
-- It does **not** guarantee exactly-once processing in the general case — see the
-  idempotency contract. It reduces duplicates; it eliminates them only under the
-  stated atomicity / idempotent-sink assumptions.
-- It does **not** decide your business definition of a duplicate beyond providing
-  a configurable key extractor.
+- It does **not** abstract Pub/Sub behind a generic multi-broker interface. It is
+  Pub/Sub-specific on purpose.
+- It does **not** guarantee exactly-once processing, and it does **not**
+  deduplicate business effects for you. It makes the at-least-once lifecycle
+  correct; your effects must tolerate redelivery (idempotent sinks) — that is the
+  application's responsibility.
+- It does **not** create spans or depend on an observability SDK. It transports
+  trace context and exposes neutral hooks; you wire your own backend.
 - It does **not** provision infrastructure (topics, subscriptions, IAM). It
   documents the requirements and, for dead-letter, can *validate* them at startup
   (v0.2) — but it never creates resources.
 
 ## Scope
 
-**v0.1 (current cycle):** publisher resilience (including ordering-aware
-publishing), subscriber resilience (including flow-control pass-through and
-ack-deadline extension), idempotency (agnostic store + in-memory + Redis, with
-the leased `claim → effect → commit` lifecycle), **opt-in native** dead-letter
-support, and **first-class observability** (lifecycle hooks + OpenTelemetry
-seam) — plus complete documentation, end-to-end tests against the Pub/Sub
-emulator and Redis, and full governance (security policy, contributing guide,
-Dependabot, branch protection).
+**v0.1 (current cycle):** resilient publishing (retry/backoff/jitter,
+ordering-aware), a correct subscriber lifecycle (ack/nack, flow-control
+pass-through, ack-deadline extension), structured envelopes, **context + header
+propagation across publisher and consumer** (zero-dep, W3C), **opt-in native**
+dead-letter support, neutral observability hooks, and a safe error surface —
+plus complete documentation, end-to-end tests against the Pub/Sub emulator, and
+full governance (security policy, contributing guide, Dependabot, branch
+protection).
 
 **Deferred (see `ROADMAP.md`):**
 
+- **Optional `IdempotencyStore` tool (Redis)** for the narrow case of
+  non-idempotent, non-controllable effects across multiple instances — with its
+  limits documented, never sold as exactly-once.
 - **Dead-letter startup preflight** — validate `deadLetterPolicy` + IAM grants
   for subscribers that opted into dead-letter handling, failing loudly on
   misconfiguration.
-- **A transactional `IdempotencyStore` adapter** (e.g., Postgres) so the dedup
-  mark and the side effect commit atomically — the path to a true exactly-once
-  guarantee for non-idempotent sinks.
 - **Application-level dead-letter republishing** with redacted error metadata
   (raw body only with explicit opt-in).
 - **A Bun test/CI matrix.**
 
 ## Definition of done
 
-Nothing is published to npm until the entire surface is complete and verified:
-end-to-end suites green in CI on both consumer repositories, README usage
-documentation finished, CHANGELOG current, security and contributing policies in
-place, Dependabot enabled, and `main` protected. The first release is the last
-gate, not the first milestone — a deliberate quality stance for a library that
-sits on the path of money and events, accepting slower external feedback in
-exchange for a stable, trustworthy first public version.
+Nothing is published to npm until the entire v0.1 surface is complete and
+verified: end-to-end suites green in CI on both consumer repositories, README
+usage documentation finished, CHANGELOG current, security and contributing
+policies in place, Dependabot enabled, and `main` protected. The first release is
+the last gate, not the first milestone — a deliberate quality stance for a
+library that sits on the path of money and events, accepting slower external
+feedback in exchange for a stable, trustworthy first public version.
