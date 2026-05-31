@@ -7,6 +7,7 @@ export default defineConfig({
     'subscriber/index': 'src/subscriber/index.ts',
     'idempotency/index': 'src/idempotency/index.ts',
     'idempotency/redis': 'src/idempotency/redis.ts',
+    'dlq/index': 'src/dlq/index.ts',
     'core/index': 'src/core/index.ts',
     'envelope/index': 'src/envelope/index.ts',
     'errors/index': 'src/errors/index.ts',

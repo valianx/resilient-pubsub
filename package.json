@@ -68,6 +68,16 @@
         "default": "./dist/idempotency/redis.cjs"
       }
     },
+    "./dlq": {
+      "import": {
+        "types": "./dist/dlq/index.d.ts",
+        "default": "./dist/dlq/index.js"
+      },
+      "require": {
+        "types": "./dist/dlq/index.d.cts",
+        "default": "./dist/dlq/index.cjs"
+      }
+    },
     "./core": {
       "import": {
         "types": "./dist/core/index.d.ts",
