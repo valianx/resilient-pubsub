@@ -11,54 +11,24 @@
  */
 
 // ============================================================================
-// Provisional serialization error
+// SerializationError — re-exported from errors module
 // ============================================================================
 
 /**
- * Error thrown when deserialization of a Pub/Sub message payload fails.
+ * Re-export `SerializationError` from `src/errors/error` so that existing
+ * import paths (`from 'resilient-pubsub/envelope'` or
+ * `from '../src/envelope/serializer.ts'`) continue to resolve without change.
  *
- * PROVISIONAL: This class exists in PR-1 as a typed placeholder. It will be
- * absorbed into `ResilientPubSubError` (kind: 'serialization') when PR-3
- * (error surface) lands. The `kind` and `classification` fields are kept stable
- * so that downstream code that catches `SerializationError` and reads those
- * fields continues to compile and behave correctly after the PR-3 migration.
+ * The class is now a proper `ResilientPubSubError` subclass (reconciled from
+ * the provisional placeholder defined here in PR-1). The marker comment
+ * PROVISIONAL_SERIALIZATION_ERROR is no longer applicable — this export is now
+ * stable and canonical.
  *
- * Greppable marker: PROVISIONAL_SERIALIZATION_ERROR — search this string when
- * migrating to ResilientPubSubError in PR-3.
- *
- * Contract:
- * - `kind === 'serialization'` — discriminant for catch handlers.
- * - `classification === 'poison'` — the message cannot be decoded and should
- *   not be retried; it must be sent to a DLQ or discarded.
- * - `retryable === false` — never retry a deserialization failure.
- * - The error message MUST NOT contain the raw payload bytes.
+ * Layering note: `envelope` importing from `errors` is permitted by the
+ * dependency graph (`envelope → errors → core/classify + utils`). The inverse
+ * direction (`errors → envelope`) is forbidden and does not occur here.
  */
-export class SerializationError extends Error {
-  /** Discriminant: always 'serialization'. Used by PR-3 to absorb this class. */
-  public readonly kind = 'serialization' as const;
-
-  /**
-   * Classification for retry logic.
-   * 'poison' means the message is unprocessable and must not be retried.
-   */
-  public readonly classification = 'poison' as const;
-
-  /** Deserialization failures are never retryable. */
-  public readonly retryable = false as const;
-
-  /**
-   * @param message - Human-readable description of the failure. MUST NOT
-   *   include raw payload bytes (security / log safety).
-   * @param cause - The underlying parse error, if any.
-   */
-  constructor(message: string, cause?: unknown) {
-    super(message);
-    this.name = 'SerializationError';
-    if (cause !== undefined) {
-      this.cause = cause;
-    }
-  }
-}
+export { SerializationError } from '../errors/error';
 
 // ============================================================================
 // Serializer<T> interface
@@ -116,6 +86,8 @@ export interface Serializer<T> {
 // ============================================================================
 // JsonSerializer<T>
 // ============================================================================
+
+import { SerializationError } from '../errors/error';
 
 /**
  * Default JSON serializer for Pub/Sub message bodies.
