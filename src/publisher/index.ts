@@ -3,17 +3,29 @@
  *
  * Resilient message publishing for Google Cloud Pub/Sub.
  *
- * Future exports:
- * - ResilientPublisher: class wrapping PublisherClient with retry/backoff
- * - PublisherOptions: configuration type for retry, idempotency, envelope
- * - publish(): functional alternative to ResilientPublisher
+ * Provides {@link createResilientPublisher} — a factory that wraps a Pub/Sub
+ * topic with retry (backoff + jitter), ordering-aware semantics, pluggable
+ * serialization, and allowlist-gated context propagation.
+ *
+ * Sub-module import (tree-shakeable):
+ * ```ts
+ * import { createResilientPublisher } from 'resilient-pubsub/publisher';
+ * ```
  *
  * @module publisher
  */
 
-/**
- * Placeholder export — implementation lands in a future PR.
- *
- * @internal
- */
-export const _publisherVersion = '0.0.0' as const;
+export {
+  createResilientPublisher,
+} from './publisher';
+
+export type {
+  PublisherOptions,
+  PublisherRetryOptions,
+  PublisherHooks,
+  PublishInput,
+  PublishResult,
+  ResilientPublisher,
+  PubSubLike,
+  TopicLike,
+} from './publisher';
