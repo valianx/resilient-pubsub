@@ -1,0 +1,44 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Test coverage
+coverage/
+
+# Package manager locks
+# pnpm-lock.yaml is committed (do not ignore)
+# package-lock.json and bun.lockb are not used
+package-lock.json
+bun.lockb
+
+# Temporary files
+*.tmp
+*.temp
+.cache/
+
+# Claude Code session docs
+/workspaces/
