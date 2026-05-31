@@ -97,6 +97,16 @@
         "types": "./dist/errors/index.d.cts",
         "default": "./dist/errors/index.cjs"
       }
+    },
+    "./propagation": {
+      "import": {
+        "types": "./dist/propagation/index.d.ts",
+        "default": "./dist/propagation/index.js"
+      },
+      "require": {
+        "types": "./dist/propagation/index.d.cts",
+        "default": "./dist/propagation/index.cjs"
+      }
     }
   },
   "files": [

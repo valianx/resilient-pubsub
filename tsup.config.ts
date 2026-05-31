@@ -10,6 +10,7 @@ export default defineConfig({
     'core/index': 'src/core/index.ts',
     'envelope/index': 'src/envelope/index.ts',
     'errors/index': 'src/errors/index.ts',
+    'propagation/index': 'src/propagation/index.ts',
   },
   format: ['esm', 'cjs'],
   dts: true,
