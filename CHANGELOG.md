@@ -11,3 +11,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial scaffold: package.json, tsconfig, tsup, eslint flat config, prettier, CI workflow
 - Stub source barrels for all planned sub-modules: publisher, subscriber, idempotency, idempotency/redis, core, envelope, errors
+- Scaffold smoke test (`tests/smoke.test.ts`) run via the Node.js test runner
+- ROADMAP.md tracking deferred work (Bun support deferred to a later release)
