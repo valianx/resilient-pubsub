@@ -3,17 +3,26 @@
  *
  * Resilient message consumption for Google Cloud Pub/Sub.
  *
- * Future exports:
- * - ResilientSubscriber: class wrapping Subscription with ack/nack management
- * - SubscriberOptions: configuration type for concurrency, retry, dead-letter
- * - MessageHandler: typed handler callback interface
+ * Provides `createResilientSubscriber<T>` which wraps a Pub/Sub subscription
+ * with correct ack/nack lifecycle management, allowlist-gated context
+ * propagation, pluggable deserialization, poison-message classification, and
+ * graceful drain-and-stop semantics.
  *
  * @module subscriber
  */
 
-/**
- * Placeholder export — implementation lands in a future PR.
- *
- * @internal
- */
-export const _subscriberVersion = '0.0.0' as const;
+export {
+  createResilientSubscriber,
+} from './subscriber';
+
+export type {
+  AckableMessage,
+  SubscriptionLike,
+  SubscriberPubSubLike,
+  SubscriberFlowControl,
+  SubscriberHooks,
+  SubscriberOptions,
+  SubscriberMessage,
+  MessageHandler,
+  ResilientSubscriber,
+} from './subscriber';

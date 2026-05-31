@@ -10,6 +10,8 @@
  * NOTE: _errorsVersion removed — errors placeholder replaced by real exports in PR-3.
  * NOTE: _publisherVersion removed — publisher placeholder replaced by real
  * exports in PR-5 (createResilientPublisher, PublisherOptions, etc.).
+ * NOTE: _subscriberVersion removed — subscriber placeholder replaced by real
+ * exports in PR-6 (createResilientSubscriber, SubscriberOptions, etc.).
  */
 
 import { test } from 'node:test';
@@ -18,5 +20,4 @@ import assert from 'node:assert/strict';
 test('root barrel re-exports the sub-module placeholders', async () => {
   const mod = await import('../src/index.ts');
   assert.equal(mod._idempotencyVersion, '0.0.0');
-  assert.equal(mod._subscriberVersion, '0.0.0');
 });
