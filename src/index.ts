@@ -31,3 +31,4 @@ export * from './core/index';
 export * from './envelope/index';
 export * from './errors/index';
 export * from './propagation/index';
+export * from './config/index';

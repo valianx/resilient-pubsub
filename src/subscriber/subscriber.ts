@@ -15,91 +15,43 @@
  *   in-flight handler promises up to `stopTimeoutMs` (default 30 000 ms),
  *   nacking still-in-flight messages on timeout so they redeliver.
  *
- * **Shared-client model:** the factory accepts an optional `pubSubClient`. If
- * none is provided, `start()` throws `ResilientPubSubError{ kind: 'config' }`.
+ * **Zero-config default client:** when `pubSubClient` is omitted, `start()`
+ * kicks off an async bootstrap that lazily resolves the default client via a
+ * dynamic import of `@google-cloud/pubsub`. The bootstrap is fire-and-forget from
+ * `start()` (which stays `void`). Bootstrap errors are surfaced through the
+ * `onError` hook as `ResilientPubSubError{ kind: 'config' }` — callers must
+ * register an `onError` hook to observe them. `stop()` is safe to call even if
+ * the bootstrap has not yet completed.
  *
- * **Zero hard runtime imports from @google-cloud/pubsub.** A minimal structural
- * interface (`SubscriberPubSubLike` / `SubscriptionLike`) is all the code
- * depends on; the peer dependency is never imported at runtime.
+ * **Env-var configuration:** resilience knobs (`stopTimeoutMs`, `maxMessages`,
+ * `maxBytes`) are read from `RESILIENT_PUBSUB_*` environment variables when not
+ * supplied programmatically. Programmatic options always win.
+ *
+ * **Zero hard runtime imports from @google-cloud/pubsub.** Structural peer
+ * interfaces (`PubSubLike` / `SubscriptionLike` / `AckableMessage`) live in
+ * `src/types/pubsub.ts` and are referenced as structural types only.
  *
  * @module subscriber/subscriber
  */
 
 import { Envelope } from '../envelope/envelope';
-import type { InboundPubSubMessage } from '../envelope/envelope';
 import type { Serializer } from '../envelope/serializer';
 import { JsonSerializer } from '../envelope/serializer';
 import { ResilientPubSubError } from '../errors/error';
 import { extractContext } from '../propagation/propagation';
 import type { PropagationOptions, Headers } from '../propagation/propagation';
 import type { EnvelopeMeta } from '../types/index';
+import type {
+  AckableMessage,
+  SubscriptionLike,
+  SubscriberPubSubLike,
+  SubscriberFlowControlLike,
+} from '../types/pubsub';
+import { resolveConfigFromEnv } from '../config/env';
+import { getDefaultPubSubClient } from '../config/client';
 
-// ============================================================================
-// Structural peer interfaces — no hard runtime import of @google-cloud/pubsub
-// ============================================================================
-
-/**
- * A received Pub/Sub message that can be acknowledged or negatively
- * acknowledged. Extends `InboundPubSubMessage` with the ack/nack methods
- * that the native `@google-cloud/pubsub` `Message` class exposes.
- *
- * The actual `Message` class from `@google-cloud/pubsub` satisfies this shape.
- */
-export interface AckableMessage extends InboundPubSubMessage {
-  /** Acknowledge the message — instructs Pub/Sub not to redeliver it. */
-  ack(): void;
-  /** Negatively acknowledge the message — instructs Pub/Sub to redeliver it. */
-  nack(): void;
-}
-
-/**
- * Minimal structural interface for a Pub/Sub subscription handle as returned
- * by the `@google-cloud/pubsub` client. Defined locally to avoid a hard
- * runtime import of the peer dependency.
- *
- * The actual `Subscription` class from `@google-cloud/pubsub` satisfies this shape.
- */
-export interface SubscriptionLike {
-  /**
-   * Registers a listener for the given event.
-   *
-   * @param event    - `'message'` for inbound messages, `'error'` for errors.
-   * @param listener - The callback to invoke.
-   */
-  on(event: 'message', listener: (msg: AckableMessage) => void): unknown;
-  on(event: 'error', listener: (err: unknown) => void): unknown;
-
-  /**
-   * Removes all listeners, optionally scoped to a specific event.
-   *
-   * @param event - When provided, removes only listeners for that event.
-   */
-  removeAllListeners(event?: string): unknown;
-
-  /**
-   * Closes the subscription and stops message delivery.
-   * Optional because not all subscription handles expose this method.
-   */
-  close?(): Promise<void>;
-}
-
-/**
- * Minimal structural interface for a Pub/Sub client as instantiated by the
- * `@google-cloud/pubsub` package. Defined locally to avoid a hard runtime
- * import of the peer dependency.
- *
- * The actual `PubSub` class from `@google-cloud/pubsub` satisfies this shape.
- */
-export interface SubscriberPubSubLike {
-  /**
-   * Returns a `Subscription` handle for the given subscription name.
-   *
-   * @param name    - The fully-qualified or short subscription name.
-   * @param options - Optional subscriber options passed through to the native client.
-   * @returns A `SubscriptionLike` handle for consuming messages.
-   */
-  subscription(name: string, options?: { flowControl?: SubscriberFlowControl }): SubscriptionLike;
-}
+// Re-export structural types so consumers can import them from this module.
+export type { AckableMessage, SubscriptionLike, SubscriberPubSubLike } from '../types/pubsub';
 
 // ============================================================================
 // Public option types
@@ -112,18 +64,20 @@ export interface SubscriberPubSubLike {
  * before applying backpressure. The ack-deadline lease is managed by the
  * native client.
  */
-export interface SubscriberFlowControl {
+export interface SubscriberFlowControl extends SubscriberFlowControlLike {
   /**
    * Maximum number of messages the client holds in memory at once.
    *
-   * @defaultValue Pub/Sub client default (typically 100)
+   * @defaultValue `RESILIENT_PUBSUB_MAX_MESSAGES` env var, or the Pub/Sub
+   *   client default (typically 100)
    */
   maxMessages?: number;
 
   /**
    * Maximum number of bytes the client holds in memory at once.
    *
-   * @defaultValue Pub/Sub client default
+   * @defaultValue `RESILIENT_PUBSUB_MAX_BYTES` env var, or the Pub/Sub
+   *   client default
    */
   maxBytes?: number;
 }
@@ -143,10 +97,12 @@ export interface SubscriberHooks {
   onAck?: (info: { messageId?: string }) => void;
 
   /**
-   * Called when the user handler throws or rejects. Receives a typed error.
+   * Called when the user handler throws or rejects, or when the async bootstrap
+   * (lazy-client resolution) fails. Receives a typed error.
    *
-   * @param error - A `ResilientPubSubError{ kind: 'process' }` wrapping the
-   *   original handler rejection.
+   * @param error - A `ResilientPubSubError` wrapping the original error.
+   *   `kind === 'process'` for handler failures; `kind === 'config'` for
+   *   bootstrap failures (e.g., peer dependency not installed).
    */
   onError?: (error: ResilientPubSubError) => void;
 
@@ -173,17 +129,14 @@ export interface SubscriberHooks {
  *
  * @typeParam T - The type of the deserialized message body.
  *
- * @example Basic subscriber (zero-config resilience)
+ * @example Zero-config (no client, env-var credentials)
  * ```ts
+ * // Set GOOGLE_CLOUD_PROJECT + ADC in environment, then:
  * const subscriber = createResilientSubscriber<OrderCreated>({
- *   subscription: 'projects/my-project/subscriptions/orders-sub',
- *   pubSubClient: new PubSub(),
+ *   subscription: 'orders-worker',
+ *   hooks: { onError: (err) => logger.error('subscriber error', err.toJSON()) },
  * });
- *
- * subscriber.on(async ({ body, headers, meta }) => {
- *   await processOrder(body);
- * });
- *
+ * subscriber.on(async ({ body }) => processOrder(body));
  * subscriber.start();
  * process.on('SIGTERM', () => subscriber.stop());
  * ```
@@ -214,8 +167,9 @@ export interface SubscriberOptions<T> {
   subscription: string;
 
   /**
-   * An existing Pub/Sub client to use. When omitted, `start()` throws
-   * `ResilientPubSubError{ kind: 'config' }`.
+   * An existing Pub/Sub client to use. When omitted, `start()` triggers an
+   * async bootstrap that lazily resolves a default client. Bootstrap errors
+   * are surfaced via the `onError` hook.
    */
   pubSubClient?: SubscriberPubSubLike;
 
@@ -237,6 +191,8 @@ export interface SubscriberOptions<T> {
    *
    * Controls how many messages and bytes the client buffers before applying
    * backpressure. The ack-deadline lease is managed by the native client.
+   * Fields also read from `RESILIENT_PUBSUB_MAX_MESSAGES` /
+   * `RESILIENT_PUBSUB_MAX_BYTES` env vars when not set programmatically.
    */
   flowControl?: SubscriberFlowControl;
 
@@ -247,7 +203,7 @@ export interface SubscriberOptions<T> {
    * After this timeout, any still-in-flight messages are nacked so that
    * Pub/Sub redelivers them to another subscriber.
    *
-   * @defaultValue `30_000`
+   * @defaultValue `RESILIENT_PUBSUB_STOP_TIMEOUT_MS` env var, or `30_000`
    */
   stopTimeoutMs?: number;
 
@@ -265,6 +221,14 @@ export interface SubscriberOptions<T> {
    * @defaultValue `(ms) => new Promise(resolve => setTimeout(resolve, ms))`
    */
   _sleep?: (ms: number) => Promise<void>;
+
+  /**
+   * Injectable client resolver for deterministic tests of the lazy-client path.
+   * When provided, replaces the call to `getDefaultPubSubClient()`.
+   *
+   * @internal
+   */
+  _clientResolver?: () => Promise<SubscriberPubSubLike>;
 }
 
 // ============================================================================
@@ -337,10 +301,12 @@ export interface ResilientSubscriber<T> {
   /**
    * Attaches to the native Pub/Sub subscription and begins consuming messages.
    *
-   * - Throws `ResilientPubSubError{ kind: 'config' }` when no `pubSubClient`
-   *   was provided.
-   * - Idempotent: calling `start()` more than once on an already-started
-   *   subscriber is a no-op (does not double-subscribe).
+   * When `pubSubClient` was provided at construction, the subscription is
+   * attached synchronously. When omitted, an async bootstrap is triggered
+   * internally — messages begin flowing once the default client resolves.
+   * Bootstrap errors (e.g., peer not installed) are surfaced via `onError`.
+   *
+   * - Idempotent: calling `start()` more than once is a no-op.
    */
   start(): void;
 
@@ -353,7 +319,7 @@ export interface ResilientSubscriber<T> {
    * 4. Resolves when drained or after the timeout.
    *
    * Safe to call from a `SIGTERM` handler. Idempotent — second call resolves
-   * immediately.
+   * immediately. Safe to call before the async bootstrap completes.
    *
    * @returns A promise that resolves once the subscriber is fully stopped.
    */
@@ -363,7 +329,7 @@ export interface ResilientSubscriber<T> {
    * The underlying native Pub/Sub `Subscription` handle.
    *
    * Exposed so advanced consumers can reach the native API. `undefined` before
-   * `start()` is called.
+   * `start()` is called or while the async bootstrap is still pending.
    */
   readonly subscription: unknown;
 }
@@ -425,35 +391,50 @@ interface InFlightEntry {
  * correct ack/nack lifecycle management, deserialization, allowlist-gated
  * context propagation, poison-message detection, and graceful stop.
  *
+ * When `pubSubClient` is not supplied, `start()` triggers a non-blocking async
+ * bootstrap. Messages begin flowing once the default client resolves. Bootstrap
+ * failures surface through the `onError` hook.
+ *
+ * Resilience knobs (`stopTimeoutMs`, `maxMessages`, `maxBytes`) fall back to
+ * `RESILIENT_PUBSUB_*` environment variables when not supplied programmatically.
+ *
  * @typeParam T  - The type of the deserialized message body.
  * @param opts   - Subscriber configuration.
  * @returns A `ResilientSubscriber<T>` ready to use.
  *
- * @throws {ResilientPubSubError} `{ kind: 'config' }` from `start()` when
- *   `opts.pubSubClient` is not provided.
- *
- * @example Zero-config resilience (shared client)
+ * @example Zero-config (env-var credentials)
  * ```ts
- * import { PubSub } from '@google-cloud/pubsub';
  * import { createResilientSubscriber } from 'resilient-pubsub/subscriber';
  *
  * const subscriber = createResilientSubscriber<OrderCreated>({
- *   subscription: 'orders-sub',
- *   pubSubClient: new PubSub(),
+ *   subscription: 'orders-worker',
+ *   hooks: { onError: (err) => logger.error(err.toJSON()) },
  * });
  *
- * subscriber.on(async ({ body }) => {
- *   await processOrder(body);
- * });
- *
+ * subscriber.on(async ({ body }) => processOrder(body));
  * subscriber.start();
  * process.on('SIGTERM', () => subscriber.stop());
  * ```
  */
 export function createResilientSubscriber<T>(opts: SubscriberOptions<T>): ResilientSubscriber<T> {
   const serializer: Serializer<T> = opts.serializer ?? (new JsonSerializer<T>() as Serializer<T>);
-  const stopTimeoutMs = opts.stopTimeoutMs ?? DEFAULT_STOP_TIMEOUT_MS;
   const sleep = opts._sleep ?? defaultSleep;
+  const clientResolver = opts._clientResolver ?? getDefaultPubSubClient;
+
+  // Read env-var config once at construction time (lenient — all may be undefined).
+  const envConfig = resolveConfigFromEnv();
+
+  // Resolution precedence: programmatic > env > built-in default.
+  const stopTimeoutMs = opts.stopTimeoutMs ?? envConfig.stopTimeoutMs ?? DEFAULT_STOP_TIMEOUT_MS;
+
+  // Flow control: merge programmatic + env-var, programmatic wins per field.
+  const resolvedFlowControl: SubscriberFlowControl = {
+    maxMessages: opts.flowControl?.maxMessages ?? envConfig.maxMessages,
+    maxBytes: opts.flowControl?.maxBytes ?? envConfig.maxBytes,
+  };
+  // Only forward flowControl when at least one field was set.
+  const hasFlowControl =
+    resolvedFlowControl.maxMessages !== undefined || resolvedFlowControl.maxBytes !== undefined;
 
   let handler: MessageHandler<T> | undefined;
   let nativeSubscription: SubscriptionLike | undefined;
@@ -474,7 +455,6 @@ export function createResilientSubscriber<T>(opts: SubscriberOptions<T>): Resili
   function processMessage(message: AckableMessage): void {
     const messageId: string | undefined = message.id || undefined;
 
-    // Build the handler promise and track it in the in-flight Set.
     const handlerPromise = runHandler(message, messageId);
 
     const entry: InFlightEntry = {
@@ -483,7 +463,6 @@ export function createResilientSubscriber<T>(opts: SubscriberOptions<T>): Resili
     };
 
     inFlight.add(entry);
-    // Remove from the Set once the handler settles (acked, nacked, or poisoned).
     void handlerPromise.finally(() => {
       inFlight.delete(entry);
     });
@@ -491,8 +470,7 @@ export function createResilientSubscriber<T>(opts: SubscriberOptions<T>): Resili
 
   /**
    * Runs the actual handler lifecycle: deserialize → dispatch → ack/nack.
-   * Returns a promise that always resolves (never rejects) so the in-flight
-   * Set cleanup in `processMessage` is guaranteed to run.
+   * Always resolves (never rejects) so the in-flight Set cleanup is guaranteed.
    *
    * @internal
    */
@@ -529,12 +507,65 @@ export function createResilientSubscriber<T>(opts: SubscriberOptions<T>): Resili
     }
   }
 
+  /**
+   * Attaches message and error listeners to an already-resolved subscription.
+   *
+   * @internal
+   */
+  function attachListeners(sub: SubscriptionLike): void {
+    nativeSubscription = sub;
+
+    sub.on('message', (msg: AckableMessage) => {
+      processMessage(msg);
+    });
+
+    sub.on('error', (err: unknown) => {
+      const subscribeError = new ResilientPubSubError(
+        `Subscription error on '${opts.subscription}': ${err instanceof Error ? err.message : String(err)}`,
+        { kind: 'subscribe', cause: err }
+      );
+      safeHook(() => opts.hooks?.onError?.(subscribeError));
+    });
+  }
+
+  /**
+   * Async bootstrap for the lazy-client path (no pubSubClient provided).
+   * Runs fire-and-forget from start(). Errors are routed to onError.
+   *
+   * @internal
+   */
+  async function asyncBootstrap(): Promise<void> {
+    // If stop() was called before the bootstrap completed, skip attachment.
+    if (stopped) return;
+
+    try {
+      const client = await clientResolver();
+
+      // Double-check stopped again — stop() may have been called while we awaited.
+      if (stopped) return;
+
+      const flowOptions = hasFlowControl ? { flowControl: resolvedFlowControl } : undefined;
+      const sub = client.subscription(opts.subscription, flowOptions);
+      attachListeners(sub);
+    } catch (err) {
+      const configError =
+        err instanceof ResilientPubSubError
+          ? err
+          : new ResilientPubSubError(
+              `Failed to initialize default Pub/Sub client for subscription ` +
+                `'${opts.subscription}': ${err instanceof Error ? err.message : String(err)}`,
+              { kind: 'config', cause: err, classification: 'permanent', retryable: false }
+            );
+      safeHook(() => opts.hooks?.onError?.(configError));
+    }
+  }
+
   // ── Graceful drain helpers ─────────────────────────────────────────────────
 
   /**
    * Resolves when all currently in-flight handlers have settled.
    * Snapshots the Set at call time so new messages arriving concurrently
-   * (before the 'message' listener is removed) do not extend the drain.
+   * do not extend the drain.
    *
    * @internal
    */
@@ -565,35 +596,18 @@ export function createResilientSubscriber<T>(opts: SubscriberOptions<T>): Resili
 
     start(): void {
       if (started) return; // idempotent — do not double-subscribe
-
-      if (opts.pubSubClient === undefined) {
-        throw new ResilientPubSubError(
-          `No Pub/Sub client provided. Pass a 'pubSubClient' to createResilientSubscriber ` +
-            `(subscription: '${opts.subscription}'). Default-client instantiation from ` +
-            `environment variables lands in a future release.`,
-          { kind: 'config', classification: 'permanent', retryable: false }
-        );
-      }
-
-      nativeSubscription = opts.pubSubClient.subscription(opts.subscription, {
-        flowControl: opts.flowControl,
-      });
-
-      nativeSubscription.on('message', (msg: AckableMessage) => {
-        // Fire-and-forget: runHandler always resolves; errors are handled inside.
-        processMessage(msg);
-      });
-
-      nativeSubscription.on('error', (err: unknown) => {
-        // Surface subscription-level errors as typed errors via onError hook.
-        const subscribeError = new ResilientPubSubError(
-          `Subscription error on '${opts.subscription}': ${err instanceof Error ? err.message : String(err)}`,
-          { kind: 'subscribe', cause: err }
-        );
-        safeHook(() => opts.hooks?.onError?.(subscribeError));
-      });
-
       started = true;
+
+      if (opts.pubSubClient !== undefined) {
+        // Synchronous path: client provided at construction time.
+        const flowOptions = hasFlowControl ? { flowControl: resolvedFlowControl } : undefined;
+        const sub = opts.pubSubClient.subscription(opts.subscription, flowOptions);
+        attachListeners(sub);
+      } else {
+        // Async bootstrap path: resolve the default client, then attach.
+        // Fire-and-forget; errors route to onError hook.
+        void asyncBootstrap();
+      }
     },
 
     async stop(): Promise<void> {
@@ -612,7 +626,6 @@ export function createResilientSubscriber<T>(opts: SubscriberOptions<T>): Resili
       ]);
 
       if (result === 'timeout') {
-        // Nack remaining in-flight messages so Pub/Sub redelivers them.
         nackAllInFlight();
       }
 

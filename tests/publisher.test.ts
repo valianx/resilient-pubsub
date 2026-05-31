@@ -580,10 +580,19 @@ describe('createResilientPublisher — AC-5.7: custom serializer', () => {
 // ============================================================================
 
 describe('createResilientPublisher — AC-5.8: no client throws config error', () => {
-  test('rejects with ResilientPubSubError{kind:config} when no pubSubClient is provided', async () => {
+  test('rejects with ResilientPubSubError{kind:config} when peer dependency cannot be resolved', async () => {
+    // AC-5.8 verifies the config-error path when no pubSubClient is provided and
+    // the default client cannot be resolved (e.g., peer not installed). We use
+    // _clientResolver to simulate that condition without relying on the real GCP env.
     const publisher = createResilientPublisher<{ x: number }>({
       topic: 'orders',
       _sleep: noSleep,
+      _clientResolver: async () => {
+        throw new ResilientPubSubError(
+          `Could not import '@google-cloud/pubsub'. Install the peer or pass a pubSubClient.`,
+          { kind: 'config', classification: 'permanent', retryable: false }
+        );
+      },
     });
 
     await assert.rejects(
