@@ -6,14 +6,36 @@ A transparent, framework-agnostic resilience layer around `@google-cloud/pubsub`
 >
 > This library is a work in progress. APIs are unstable and may change without notice until v1.0.0.
 
-## Planned Features
+Zero runtime dependencies in the core, with explicit peers. It wraps the
+official client transparently — it never takes the transport away from you. See
+[`docs/VISION.md`](docs/VISION.md) for the full design intent and honest
+guarantees.
 
-- **Idempotent Publishing** — deduplication via pluggable idempotency stores (in-memory + Redis)
-- **Structured Envelopes** — typed message codec with schema versioning
-- **Retry with Backoff/Jitter** — exponential, linear, and constant strategies with full/equal/decorrelated jitter
-- **Dead-Letter Support** — native integration with Google Cloud Pub/Sub dead-letter policies
-- **Resilient Subscriber** — concurrency-controlled message consumption with ack/nack management
-- **TypeScript First** — full type definitions included
+## Planned features (v0.1)
+
+- **Resilient publishing** — retry with exponential / linear / constant backoff
+  and full / equal / decorrelated jitter; ordering-aware (`resumePublishing`).
+- **Correct subscriber lifecycle** — `throw → nack` (retry), `return → ack`
+  (done), over the native client's flow-control and ack-deadline lease
+  management.
+- **Structured envelopes** — typed `Envelope<T>` with a pluggable serializer
+  (JSON by default) and a `schema-version` marker carried in attributes.
+- **Context propagation across the hop** — W3C trace correlation and
+  allowlist-gated headers travel publisher → message → consumer. Zero-dep, no
+  OpenTelemetry SDK. `baggage` is off by default; **do not put PII in propagated
+  headers** — attributes are not a redacted channel.
+- **Opt-in native dead-letter** — `deadLetterPolicy` pass-through; `delivery_attempt`
+  surfaced on the envelope.
+- **Safe error surface** — `ResilientPubSubError` whose `toJSON()` never leaks
+  secrets or PII by default.
+- **TypeScript first** — full type definitions, dual ESM + CJS, tree-shakeable.
+
+> **On idempotency:** Pub/Sub is at-least-once, so handlers must tolerate
+> redelivery (make effects idempotent). The library makes the ack/nack lifecycle
+> correct but does **not** guarantee exactly-once processing. A built-in
+> deduplication store is intentionally out of v0.1 scope — see
+> [`ROADMAP.md`](ROADMAP.md) and the vision's
+> [Idempotency](docs/VISION.md#idempotency-is-a-shared-responsibility) section.
 
 ## Installation
 
@@ -28,11 +50,7 @@ npm install resilient-pubsub @google-cloud/pubsub
 yarn add resilient-pubsub @google-cloud/pubsub
 ```
 
-### Optional: Redis idempotency store
-
-```bash
-pnpm add redis
-```
+`@google-cloud/pubsub` is a required peer dependency.
 
 ## License
 
