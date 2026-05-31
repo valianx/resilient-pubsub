@@ -49,6 +49,41 @@ Pub/Sub — it makes the at-least-once lifecycle correct, observable, and ergono
 Deduplicating business effects remains the application's responsibility; see
 [Idempotency is a shared responsibility](#idempotency-is-a-shared-responsibility).
 
+## A standard message contract — the core value
+
+Resilience (retry, backoff, jitter, ack/nack, dead-letter) is worthwhile, but the
+native client already does or eases much of it. The thing no other tool gives a
+team — and the reason this library earns its place — is a **single, typed,
+symmetric message contract**:
+
+> You **publish** `{ body, headers }` and you **receive** `{ body, headers, meta }`.
+> One message shape, learned once, used everywhere.
+
+This reframes the library: it is not "another retry layer over Pub/Sub" — it is
+**the standard way an organization produces and consumes messages, with
+resilience built in**. Resilience becomes a property; the message contract is the
+product. The value comes from removing decisions and drift:
+
+- **No "where does this go?" decisions.** Without a contract, every developer
+  decides whether `tenantId` lives in the body or in attributes, and what to name
+  `traceId`. With it, there is one place and one name. Five teams emit
+  structurally identical messages.
+- **End-to-end type safety.** `createResilientPublisher<OrderCreated>` and
+  `createResilientSubscriber<OrderCreated>` share the type. If a publisher changes
+  the shape, the consumer **does not compile** — a runtime "malformed message in
+  production" bug becomes a compile-time error.
+- **Flat onboarding.** A new developer learns *one* format and can publish to and
+  consume from any service in the organization. No "payments does it this way,
+  notifications does it that way."
+- **The optional validator closes the contract.** Inside the handler, `body` is
+  always a valid `T` — no defensive shape-checking repeated in every consumer
+  (malformed input is classified poison before the handler runs).
+
+The full shape and its rules live in
+[What this library is](#what-this-library-is) (points 2–4); the point here is that
+this contract is a **first-class goal**, on par with zero-config and honest
+guarantees — not a side feature.
+
 ## Zero-config by default — the primary design goal
 
 The headline promise of this library is **ergonomics**: install it, set your
