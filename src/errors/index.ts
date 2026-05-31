@@ -1,20 +1,26 @@
 /**
  * resilient-pubsub/errors
  *
- * Error types and classification for resilient Pub/Sub operations.
+ * Canonical error surface for all resilient-pubsub operations.
  *
- * Future exports:
- * - ResilientPubSubError: canonical error class with kind, code, and retryability
- * - isResilientPubSubError(err): type guard
- * - ErrorKind: 'publish' | 'subscribe' | 'ack' | 'network' | 'setup'
- * - classifyError(err): ErrorKind — maps raw Pub/Sub errors to known kinds
+ * **Exports:**
+ * - {@link ResilientPubSubError} — structured base error class.
+ * - {@link SerializationError} — poison subclass for undecodable payloads.
+ * - {@link isResilientPubSubError} — cross-realm type guard.
+ * - {@link ErrorKind} — discriminant union (`'publish' | 'subscribe' | ...`).
+ * - Redaction utilities: {@link redactSecrets}, {@link redactHeaders}, {@link capMessage}.
  *
  * @module errors
  */
 
-/**
- * Placeholder export — implementation lands in a future PR.
- *
- * @internal
- */
-export const _errorsVersion = '0.0.0' as const;
+export {
+  ResilientPubSubError,
+  SerializationError,
+  isResilientPubSubError,
+} from './error';
+
+export type { ErrorKind, Classification, ResilientPubSubErrorOptions } from './error';
+
+// Redaction helpers are part of the public errors surface so that consumers
+// can apply the same sanitization rules to their own log messages.
+export { redactSecrets, redactHeaders, capMessage } from '../utils/redact';
