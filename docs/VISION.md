@@ -62,26 +62,67 @@ a handful of lines. Resilience is on by default; you write configuration only to
 // Publisher — retry, backoff, jitter, and context propagation are already on.
 import { createResilientPublisher } from 'resilient-pubsub';
 
-const publisher = createResilientPublisher({ topic: 'orders' });
-await publisher.publish({ orderId: '42' });
+const publisher = createResilientPublisher<OrderCreated>({ topic: 'orders' });
+
+// You pass the SAME { body, headers } shape you receive when consuming —
+// symmetric input/output. publish() retries internally; if it still fails after
+// exhausting retries it REJECTS with a typed ResilientPubSubError — it never
+// swallows a lost event.
+try {
+  await publisher.publish({
+    body: { orderId: '42' },
+    headers: { traceId: 'abc-123' }, // allowlist-gated; marshalled to attributes
+  });
+} catch (err) {
+  // err is a ResilientPubSubError: the publish failed permanently. Handle it
+  // (alert, persist for later, fail the request) — the library will not hide it.
+}
 ```
 
 ```ts
-// Subscriber — throw → nack (retry), return → ack (done). Deadline extension,
-// envelope decoding, and context extraction are already on.
+// Subscriber — throw → nack (retry), return → ack (done). The library catches
+// the throw for you: you do NOT write try/catch in the handler. Deadline
+// extension, envelope decoding, and context extraction are already on.
 import { createResilientSubscriber } from 'resilient-pubsub';
 
-const subscriber = createResilientSubscriber({ subscription: 'orders-worker' });
-subscriber.on(async (message) => {
-  // your business logic
+const subscriber = createResilientSubscriber<OrderCreated>({
+  subscription: 'orders-worker',
+});
+subscriber.on(async (msg) => {
+  msg.body; // OrderCreated — typed, already deserialized
+  msg.headers; // { traceId: 'abc-123' } — SAME shape you published
+  msg.meta; // messageId, deliveryAttempt, publishTime, orderingKey (inbound only)
+  // your business logic — throw to retry, return to ack
 });
 subscriber.start();
 ```
 
+The **`{ body, headers }` shape is symmetric**: you publish it and you receive
+it, so a developer learns one message format for both sides. This is the
+library's own surface, not the wire format — `headers` are marshalled to/from
+Pub/Sub `attributes` under the hood. The one asymmetry is `meta` (messageId,
+deliveryAttempt, publishTime, orderingKey): it exists **only on consume**, because
+Pub/Sub populates it at delivery — you cannot set it when publishing, so the
+publish shape does not pretend to accept it.
+
+**Who handles the throw — opposite on each side, by design:**
+
+- **Subscriber:** the library **catches** your handler's throw and turns it into
+  a `nack` (retry). You do **not** write try/catch in the handler — swallowing
+  the error there would break the retry contract. That boilerplate removal is the
+  point.
+- **Publisher:** the library **retries** the publish but does **not** swallow the
+  final failure. After exhausting retries, `publish()` rejects with a typed
+  `ResilientPubSubError`, and the caller is expected to handle it (`await` +
+  try/catch). Hiding a permanently failed publish would silently drop an event —
+  unacceptable on the path of money. The library owns *retrying*, not *concealing
+  the outcome*.
+
 **The ergonomics budget (a verifiable commitment, not an aspiration):**
 
-- The publisher happy path is **≤ 3 lines** of library code (import, create,
-  publish).
+- The publisher happy path is **≤ 3 lines** of library code to wire (import,
+  create, publish); error handling around `publish()` is the caller's, by design
+  (see above).
 - The subscriber happy path is **≤ 4 lines** of library code (import, create,
   register handler, start).
 - The only things the caller *must* provide are the **resource name** (topic /
@@ -117,17 +158,26 @@ A transparent, framework-agnostic resilience layer that wraps the official
    preserves per-key order and resumes after a failure (`resumePublishing`)
    instead of silently reordering. The heavy lifting is the native client's; the
    library just exposes the option and handles resume correctly.
-2. **A correct subscriber lifecycle** — a handler that throws becomes a `nack`
-   (redelivery); a handler that resolves becomes an `ack`. Flow control
+2. **A correct subscriber lifecycle** — the handler receives a typed
+   `{ body, headers, meta }` message (the same `{ body, headers }` shape used to
+   publish, plus inbound-only `meta`). A handler that throws becomes a `nack`
+   (redelivery) — **the library catches the throw**, so handlers stay free of
+   try/catch boilerplate; a handler that resolves becomes an `ack`. Flow control
    (`maxOutstandingMessages` / `maxOutstandingBytes`) and ack-deadline extension
    are **the native client's own lease management** (it modacks automatically up
    to `maxExtension`); the library exposes these as documented pass-through with
    sensible defaults rather than reimplementing them. The value the library adds
-   here is the ergonomic throw→nack / resolve→ack wiring, not the lease
-   machinery — that heavy lifting is the native client's.
-3. **Structured envelopes** — a typed `Envelope<T>` plus a pluggable
-   `Serializer<T>` (JSON by default), with content-type and schema-version
-   carried in attributes.
+   here is the ergonomic throw→nack / resolve→ack wiring and the typed message,
+   not the lease machinery — that heavy lifting is the native client's.
+3. **Structured, symmetric envelopes** — you publish `{ body, headers }` and you
+   receive `{ body, headers, meta }`: one message shape for both sides. `body` is
+   typed (`Envelope<T>`) and serialized through a pluggable `Serializer<T>` (JSON
+   by default), with content-type and schema-version carried in attributes. An
+   **optional validator** can be supplied: if an inbound `body` does not match the
+   expected type, the library classifies it as **poison** and routes it to the
+   dead-letter topic (or nacks) **without invoking your handler** — so inside the
+   handler `body` is always a valid `T`, with no defensive shape-checking. Without
+   a validator, the deserialized body is passed through as-is.
 4. **Context and header propagation across the hop** — on publish, the library
    writes W3C trace-correlation context (`traceparent` / `tracestate`) into the
    message attributes; on consume, it extracts it and exposes it to the handler,
@@ -262,10 +312,12 @@ These are inherited directly from `resilient-http`, the sibling library.
 - It does **not** guarantee exactly-once processing or deduplicate business
   effects for you — your effects must tolerate redelivery. See
   [Idempotency is a shared responsibility](#idempotency-is-a-shared-responsibility).
-- It does **not** validate or migrate message schemas. The envelope carries a
-  `schema-version` marker across the hop, but acting on a version mismatch on
-  consume — rejecting, routing, or migrating — is the application's
-  responsibility; the library only transports the marker.
+- It does **not** migrate message schemas, and it validates only when you opt in.
+  The envelope carries a `schema-version` marker across the hop; an optional
+  validator can reject a malformed `body` as poison on consume, but interpreting a
+  `schema-version` mismatch — routing, transforming, or migrating between
+  versions — is the application's responsibility. The library transports the
+  marker and, if asked, gate-keeps the shape; it does not migrate.
 - It does **not** create spans or depend on an observability SDK. It transports
   trace context and exposes neutral hooks; you wire your own backend.
 - It does **not** provision infrastructure (topics, subscriptions, IAM). It
