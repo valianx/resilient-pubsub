@@ -49,6 +49,63 @@ Pub/Sub — it makes the at-least-once lifecycle correct, observable, and ergono
 Deduplicating business effects remains the application's responsibility; see
 [Idempotency is a shared responsibility](#idempotency-is-a-shared-responsibility).
 
+## Zero-config by default — the primary design goal
+
+The headline promise of this library is **ergonomics**: install it, set your
+environment variables, and have a working, resilient publisher or subscriber with
+a handful of lines. Resilience is on by default; you write configuration only to
+*change* a default, never to *enable* one.
+
+**The happy path, in full:**
+
+```ts
+// Publisher — retry, backoff, jitter, and context propagation are already on.
+import { createResilientPublisher } from 'resilient-pubsub';
+
+const publisher = createResilientPublisher({ topic: 'orders' });
+await publisher.publish({ orderId: '42' });
+```
+
+```ts
+// Subscriber — throw → nack (retry), return → ack (done). Deadline extension,
+// envelope decoding, and context extraction are already on.
+import { createResilientSubscriber } from 'resilient-pubsub';
+
+const subscriber = createResilientSubscriber({ subscription: 'orders-worker' });
+subscriber.on(async (message) => {
+  // your business logic
+});
+subscriber.start();
+```
+
+**The ergonomics budget (a verifiable commitment, not an aspiration):**
+
+- The publisher happy path is **≤ 3 lines** of library code (import, create,
+  publish).
+- The subscriber happy path is **≤ 4 lines** of library code (import, create,
+  register handler, start).
+- The only things the caller *must* provide are the **resource name** (topic /
+  subscription) and, for the subscriber, the **handler** — both irreducible: the
+  library cannot guess what you subscribe to or what your business logic is.
+- Everything else has a **safe default** and is overridable.
+
+This budget is enforced through the end-to-end consumer repositories and the
+README quickstart: if the happy path grows past it, that is a regression to fix,
+not a new normal to accept.
+
+**Configuration model — convention + environment variables:**
+
+- **GCP project and credentials** come from the standard GCP environment
+  (`GOOGLE_CLOUD_PROJECT` / `GOOGLE_APPLICATION_CREDENTIALS`) — the library does
+  not invent its own scheme for what Google already standardizes.
+- **Resilience knobs** (retry attempts, backoff/jitter strategy, deadlines, flow
+  control) are read from a documented `RESILIENT_PUBSUB_*` environment-variable
+  convention, each with a safe default. A 12-factor deployment can tune behavior
+  without touching code.
+- **Programmatic overrides** are always available for callers who prefer explicit
+  configuration in code; env vars and defaults are the convenience layer, not the
+  only layer.
+
 ## What this library is
 
 A transparent, framework-agnostic resilience layer that wraps the official
@@ -157,6 +214,11 @@ documents the requirements; the preflight validation lands in v0.2 — see
 
 These are inherited directly from `resilient-http`, the sibling library.
 
+- **Zero-config by default.** The library must work out of the box from
+  environment variables and safe defaults, within the ergonomics budget above.
+  Configuration changes a default; it is never required to enable resilience. Any
+  feature that cannot be made to work with a safe default must justify why it
+  needs explicit configuration.
 - **Framework-agnostic.** No coupling to any web framework, DI container, or
   runtime beyond Node.js. It works the same in a plain script, in NestJS, or in
   any worker.
@@ -242,9 +304,10 @@ claim and enforce the ergonomics budget on real consumer code.
 ## Definition of done
 
 Nothing is published to npm until the entire v0.1 surface is complete and
-verified: end-to-end suites green in CI on both consumer repositories, README
-usage documentation finished, CHANGELOG current, security and contributing
-policies in place, Dependabot enabled, and `main` protected. The first release is
-the last gate, not the first milestone — a deliberate quality stance for a
-library that sits on the path of money and events, accepting slower external
-feedback in exchange for a stable, trustworthy first public version.
+verified: the ergonomics budget holds (publisher ≤ 3 lines, subscriber ≤ 4 lines
+in the consumer e2e repos), end-to-end suites green in CI on both consumer
+repositories, README usage documentation finished, CHANGELOG current, security
+and contributing policies in place, Dependabot enabled, and `main` protected. The
+first release is the last gate, not the first milestone — a deliberate quality
+stance for a library that sits on the path of money and events, accepting slower
+external feedback in exchange for a stable, trustworthy first public version.
