@@ -130,6 +130,12 @@ subscriber.on(async (msg) => {
   // your business logic — throw to retry, return to ack
 });
 subscriber.start();
+
+// Graceful shutdown — drain in-flight handlers before exiting (essential on
+// GKE/Cloud Run, where SIGTERM is routine). stop() stops pulling new messages,
+// waits for in-flight handlers up to a timeout, and nacks whatever is still
+// running so it is redelivered, not lost.
+process.on('SIGTERM', () => subscriber.stop());
 ```
 
 The **`{ body, headers }` shape is symmetric**: you publish it and you receive
@@ -193,26 +199,30 @@ A transparent, framework-agnostic resilience layer that wraps the official
    preserves per-key order and resumes after a failure (`resumePublishing`)
    instead of silently reordering. The heavy lifting is the native client's; the
    library just exposes the option and handles resume correctly.
-2. **A correct subscriber lifecycle** — the handler receives a typed
-   `{ body, headers, meta }` message (the same `{ body, headers }` shape used to
-   publish, plus inbound-only `meta`). A handler that throws becomes a `nack`
-   (redelivery) — **the library catches the throw**, so handlers stay free of
-   try/catch boilerplate; a handler that resolves becomes an `ack`. Flow control
+2. **A correct subscriber lifecycle — start to graceful stop** — the handler
+   receives a typed `{ body, headers, meta }` message (the same `{ body, headers }`
+   shape used to publish, plus inbound-only `meta`). A handler that throws becomes
+   a `nack` (redelivery) — **the library catches the throw**, so handlers stay free
+   of try/catch boilerplate; a handler that resolves becomes an `ack`. Flow control
    (`maxOutstandingMessages` / `maxOutstandingBytes`) and ack-deadline extension
    are **the native client's own lease management** (it modacks automatically up
    to `maxExtension`); the library exposes these as documented pass-through with
-   sensible defaults rather than reimplementing them. The value the library adds
-   here is the ergonomic throw→nack / resolve→ack wiring and the typed message,
-   not the lease machinery — that heavy lifting is the native client's.
+   sensible defaults rather than reimplementing them. **`stop()` performs a
+   graceful drain**: it stops pulling new messages, waits for in-flight handlers to
+   finish up to a configurable timeout, and nacks anything still running when the
+   timeout elapses (so it is cleanly redelivered, never lost). This is the teardown
+   half of the lifecycle and is as much a part of the value as `start()` — on a
+   platform like GKE, SIGTERM is constant, and a subscriber that dies mid-handler
+   without draining manufactures exactly the redeliveries that stress
+   [idempotency](#idempotency-is-a-shared-responsibility). The documented pattern
+   wires `stop()` to SIGTERM/SIGINT.
 3. **Structured, symmetric envelopes** — you publish `{ body, headers }` and you
    receive `{ body, headers, meta }`: one message shape for both sides. `body` is
    typed (`Envelope<T>`) and serialized through a pluggable `Serializer<T>` (JSON
-   by default), with content-type and schema-version carried in attributes. An
-   **optional validator** can be supplied: if an inbound `body` does not match the
-   expected type, the library classifies it as **poison** and routes it to the
-   dead-letter topic (or nacks) **without invoking your handler** — so inside the
-   handler `body` is always a valid `T`, with no defensive shape-checking. Without
-   a validator, the deserialized body is passed through as-is.
+   by default), with content-type and schema-version carried in attributes.
+   (Optional shape *validation* of the inbound body — reject-as-poison on
+   mismatch — is deferred to v0.2; see `ROADMAP.md`. In v0.1 the deserialized body
+   is passed through as-is.)
 4. **Context and header propagation across the hop** — on publish, the library
    writes W3C trace-correlation context (`traceparent` / `tracestate`) into the
    message attributes; on consume, it extracts it and exposes it to the handler,
@@ -355,6 +365,9 @@ These are inherited directly from `resilient-http`, the sibling library.
   marker and, if asked, gate-keeps the shape; it does not migrate.
 - It does **not** create spans or depend on an observability SDK. It transports
   trace context and exposes neutral hooks; you wire your own backend.
+- It does **not** validate message body shape in v0.1 (deferred to v0.2; see
+  `ROADMAP.md`) and never migrates schemas — it transports the `schema-version`
+  marker, but interpreting a mismatch is the application's responsibility.
 - It does **not** provision infrastructure (topics, subscriptions, IAM). It
   documents the requirements and, for dead-letter, can *validate* them at startup
   (v0.2) — but it never creates resources.
@@ -363,7 +376,8 @@ These are inherited directly from `resilient-http`, the sibling library.
 
 **v0.1 (current cycle):** resilient publishing (retry/backoff/jitter,
 ordering-aware), a correct subscriber lifecycle (ack/nack wiring over the native
-client's flow-control and ack-deadline lease management), structured envelopes,
+client's flow-control and ack-deadline lease management) **including graceful
+`stop()` that drains in-flight handlers with a timeout**, structured envelopes,
 **allowlist-gated context + header propagation across publisher and consumer**
 (zero-dep, W3C), **opt-in native** dead-letter support, neutral observability
 hooks, and a safe error surface — plus complete documentation, end-to-end tests

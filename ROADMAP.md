@@ -42,6 +42,13 @@ decisions are not lost.
   envelope to a dead-letter topic with redacted error metadata (no secrets/PII;
   raw body only with explicit opt-in). v0.1 ships native `deadLetterPolicy`
   pass-through only.
+- **Optional inbound body validation.** A caller-supplied validator (schema or
+  function) checked on consume: a body that does not match the expected type `T`
+  is classified **poison** and routed to the dead-letter topic (or nacked)
+  **without invoking the handler**, so inside the handler `body` is always a valid
+  `T` with no defensive shape-checking. v0.1 passes the deserialized body through
+  as-is and leaves shape validation to the application; this brings it into the
+  library as an opt-in. Never migrates schemas — only gate-keeps the shape.
 - **Turnkey OpenTelemetry bridge (optional).** v0.1 already propagates W3C trace
   context across the publisher → consumer hop and exposes neutral observability
   hooks, with no SDK dependency. v0.2 may add an *optional* bridge that creates
