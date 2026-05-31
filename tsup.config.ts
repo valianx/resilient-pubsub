@@ -12,6 +12,7 @@ export default defineConfig({
     'envelope/index': 'src/envelope/index.ts',
     'errors/index': 'src/errors/index.ts',
     'propagation/index': 'src/propagation/index.ts',
+    'config/index': 'src/config/index.ts',
   },
   format: ['esm', 'cjs'],
   dts: true,

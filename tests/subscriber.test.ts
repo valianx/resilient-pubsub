@@ -477,24 +477,39 @@ describe('createResilientSubscriber — AC-6.3: poison / deserialization failure
 // AC-6.4: start() without pubSubClient → config error
 // ============================================================================
 
-describe('createResilientSubscriber — AC-6.4: no client throws config error', () => {
-  test('start() throws ResilientPubSubError{kind:config} when no pubSubClient is provided', () => {
+describe('createResilientSubscriber — AC-6.4: no client surfaces config error via onError', () => {
+  test('start() triggers async bootstrap; onError receives ResilientPubSubError{kind:config} when peer is missing', async () => {
+    // AC-6.4 verifies the config-error path when no pubSubClient is provided and
+    // the default client cannot be resolved. start() stays void; the error surfaces
+    // through onError. We use _clientResolver to simulate a failed peer import.
+    let capturedError: unknown;
+
     const subscriber = createResilientSubscriber<{ x: number }>({
       subscription: 'my-sub',
       _sleep: noSleep,
+      hooks: {
+        onError: (err) => { capturedError = err; },
+      },
+      _clientResolver: async () => {
+        throw new ResilientPubSubError(
+          `Could not import '@google-cloud/pubsub'. Install the peer or pass a pubSubClient.`,
+          { kind: 'config', classification: 'permanent', retryable: false }
+        );
+      },
     });
 
     subscriber.on(async () => { /* unused */ });
 
-    assert.throws(
-      () => subscriber.start(),
-      (err: unknown) => {
-        assert.ok(err instanceof ResilientPubSubError, 'must be ResilientPubSubError');
-        assert.equal(err.kind, 'config');
-        assert.equal(err.retryable, false);
-        return true;
-      }
-    );
+    // start() must NOT throw — async bootstrap is fire-and-forget
+    assert.doesNotThrow(() => subscriber.start());
+
+    // Wait for the async bootstrap to settle and deliver the error.
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.ok(capturedError instanceof ResilientPubSubError, 'onError must receive ResilientPubSubError');
+    assert.equal((capturedError as ResilientPubSubError).kind, 'config');
+    assert.equal((capturedError as ResilientPubSubError).retryable, false);
   });
 });
 

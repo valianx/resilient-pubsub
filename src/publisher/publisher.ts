@@ -10,13 +10,20 @@
  * - **Exhaustion** → reject with `ResilientPubSubError{ kind: 'publish' }` (cause = last error).
  * - **Never swallows** a failed publish — the caller must handle the rejection.
  *
- * **Shared-client model:** the factory accepts an optional `pubSubClient`. If
- * none is provided, it throws `ResilientPubSubError{ kind: 'config' }` on first
- * `publish()` — real default-client instantiation lands in PR-8.
+ * **Zero-config default client:** when `pubSubClient` is omitted the publisher
+ * resolves a shared default client via a dynamic import of `@google-cloud/pubsub`
+ * on the first `publish()` call. GCP project and credentials are read from the
+ * standard GCP environment (`GOOGLE_CLOUD_PROJECT` / ADC). If the peer is not
+ * installed, the first `publish()` rejects with `ResilientPubSubError{ kind: 'config' }`.
  *
- * **Zero hard runtime imports from @google-cloud/pubsub.** A minimal structural
- * interface (`PubSubLike` / `TopicLike`) is all the code depends on; the peer
- * dependency type (`PubSub`) is imported type-only.
+ * **Env-var configuration:** resilience knobs are read from `RESILIENT_PUBSUB_*`
+ * environment variables when not supplied programmatically (see `src/config/env.ts`).
+ * Programmatic options always win. Unset or invalid env vars fall back to built-in
+ * safe defaults.
+ *
+ * **Zero hard runtime imports from @google-cloud/pubsub.** Structural peer
+ * interfaces (`PubSubLike` / `TopicLike`) live in `src/types/pubsub.ts` and are
+ * imported type-only here.
  *
  * @module publisher/publisher
  */
@@ -31,57 +38,13 @@ import { ResilientPubSubError } from '../errors/error';
 import { injectContext } from '../propagation/propagation';
 import type { PropagationOptions, Headers } from '../propagation/propagation';
 import type { Attributes } from '../types/index';
+import type { PubSubLike, TopicLike } from '../types/pubsub';
+import { resolveConfigFromEnv } from '../config/env';
+import { getDefaultPubSubClient } from '../config/client';
 
-// ============================================================================
-// Structural peer interfaces — no hard runtime import of @google-cloud/pubsub
-// ============================================================================
-
-/**
- * Minimal structural interface for a Pub/Sub topic as returned by the
- * `@google-cloud/pubsub` client. Defined locally so that the publisher has
- * zero runtime imports from the peer dependency.
- *
- * The actual `Topic` class from `@google-cloud/pubsub` satisfies this shape.
- */
-export interface TopicLike {
-  /**
-   * Publishes a message and returns the server-assigned message ID.
-   *
-   * @param message - The message to publish.
-   * @returns A promise that resolves to the message ID string.
-   */
-  publishMessage(message: {
-    data: Buffer;
-    attributes?: Record<string, string>;
-    orderingKey?: string;
-  }): Promise<string>;
-
-  /**
-   * Resumes ordered publishing for a given ordering key after a publish failure.
-   * Required when `enableMessageOrdering` is configured on the topic.
-   *
-   * @param orderingKey - The key whose publishing should be resumed.
-   */
-  resumePublishing(orderingKey: string): void;
-}
-
-/**
- * Minimal structural interface for a Pub/Sub client as instantiated by the
- * `@google-cloud/pubsub` package. Defined locally to avoid a hard runtime
- * import of the peer dependency.
- *
- * The actual `PubSub` class from `@google-cloud/pubsub` satisfies this shape.
- */
-export interface PubSubLike {
-  /**
-   * Returns a `Topic` handle for the given topic name.
-   *
-   * @param name - The fully-qualified or short topic name.
-   * @param opts - Optional publisher options (passed through to the native client).
-   * @returns A `TopicLike` handle for publishing.
-   */
-  topic(name: string, opts?: Record<string, unknown>): TopicLike;
-}
+// Re-export structural types so consumers can import them from this module
+// (preserves the existing public surface from publisher/index.ts).
+export type { PubSubLike, TopicLike } from '../types/pubsub';
 
 // ============================================================================
 // Public option types
@@ -91,47 +54,49 @@ export interface PubSubLike {
  * Retry configuration for the resilient publisher.
  *
  * All fields are optional; defaults are production-safe out of the box.
+ * Values not supplied here fall back to `RESILIENT_PUBSUB_*` environment
+ * variables, then to built-in safe defaults.
  */
 export interface PublisherRetryOptions {
   /**
    * Maximum number of publish attempts (first attempt + retries).
    *
-   * @defaultValue `3`
+   * @defaultValue `RESILIENT_PUBSUB_MAX_ATTEMPTS` env var, or `3`
    */
   maxAttempts?: number;
 
   /**
    * Backoff strategy between retries.
    *
-   * @defaultValue `'exponential'`
+   * @defaultValue `RESILIENT_PUBSUB_BACKOFF_STRATEGY` env var, or `'exponential'`
    */
   strategy?: BackoffStrategy;
 
   /**
    * Base delay in milliseconds for the first retry.
    *
-   * @defaultValue `1000`
+   * @defaultValue `RESILIENT_PUBSUB_INITIAL_DELAY` env var, or `1000`
    */
   initialDelay?: number;
 
   /**
    * Upper bound for the backoff delay in milliseconds.
    *
-   * @defaultValue `30000`
+   * @defaultValue `RESILIENT_PUBSUB_MAX_DELAY` env var, or `30000`
    */
   maxDelay?: number;
 
   /**
    * Growth multiplier used by exponential and linear strategies.
    *
-   * @defaultValue `2`
+   * @defaultValue `RESILIENT_PUBSUB_MULTIPLIER` env var, or `2`
    */
   multiplier?: number;
 
   /**
    * Jitter algorithm applied to the computed backoff delay.
    *
-   * @defaultValue `'full'`
+   * @defaultValue `RESILIENT_PUBSUB_JITTER` env var, or `'full'`
    */
   jitter?: JitterStrategy;
 }
@@ -163,15 +128,14 @@ export interface PublisherHooks {
  *
  * @typeParam T - The type of the message body this publisher produces.
  *
- * @example Basic publisher (zero-config resilience)
+ * @example Zero-config (no client, env-var credentials)
  * ```ts
- * const publisher = createResilientPublisher<OrderCreated>({
- *   topic: 'orders',
- *   pubSubClient: new PubSub(),
- * });
+ * // Set GOOGLE_CLOUD_PROJECT + ADC in environment, then:
+ * const publisher = createResilientPublisher<OrderCreated>({ topic: 'orders' });
+ * await publisher.publish({ body: { orderId: '42' } });
  * ```
  *
- * @example Full configuration
+ * @example Shared client with full configuration
  * ```ts
  * const publisher = createResilientPublisher<OrderCreated>({
  *   topic: 'orders',
@@ -182,7 +146,7 @@ export interface PublisherHooks {
  *   propagation: { allowlist: ['x-tenant-id'], baggage: false },
  *   schemaVersion: '1.0.0',
  *   hooks: {
- *     onRetry: ({ attempt, delay, error }) => logger.warn('Retrying...', { attempt, delay }),
+ *     onRetry: ({ attempt, delay }) => logger.warn('Retrying...', { attempt, delay }),
  *     onPublish: ({ messageId }) => metrics.increment('publish.success'),
  *   },
  * });
@@ -195,9 +159,9 @@ export interface PublisherOptions<T> {
   topic: string;
 
   /**
-   * An existing Pub/Sub client to use. When omitted, the publisher throws
-   * `ResilientPubSubError{ kind: 'config' }` on first publish — real
-   * zero-config default-client instantiation lands in PR-8.
+   * An existing Pub/Sub client to use. When omitted, the publisher lazily
+   * resolves a shared default client from the standard GCP environment on the
+   * first `publish()` call.
    */
   pubSubClient?: PubSubLike;
 
@@ -207,7 +171,8 @@ export interface PublisherOptions<T> {
   serializer?: Serializer<T>;
 
   /**
-   * Retry and backoff configuration. All fields have safe defaults.
+   * Retry and backoff configuration. All fields have safe defaults, further
+   * overridable via `RESILIENT_PUBSUB_*` environment variables.
    */
   retry?: PublisherRetryOptions;
 
@@ -247,6 +212,14 @@ export interface PublisherOptions<T> {
    * @defaultValue `(ms) => new Promise(resolve => setTimeout(resolve, ms))`
    */
   _sleep?: (ms: number) => Promise<void>;
+
+  /**
+   * Injectable client resolver for deterministic tests of the lazy-client path.
+   * When provided, replaces the call to `getDefaultPubSubClient()`.
+   *
+   * @internal
+   */
+  _clientResolver?: () => Promise<PubSubLike>;
 }
 
 // ============================================================================
@@ -310,9 +283,14 @@ export interface ResilientPublisher<T> {
    * On exhaustion, rejects with `ResilientPubSubError{ kind: 'publish' }`.
    * Permanent / poison / unknown errors are rejected immediately.
    *
+   * When no `pubSubClient` was provided at construction, the default client is
+   * resolved lazily on the first call. If `@google-cloud/pubsub` is not
+   * installed, rejects with `ResilientPubSubError{ kind: 'config' }`.
+   *
    * @param input - The message to publish.
    * @returns A promise that resolves to the Pub/Sub message ID.
-   * @throws {ResilientPubSubError} On permanent failure or retry exhaustion.
+   * @throws {ResilientPubSubError} On permanent failure, retry exhaustion, or
+   *   missing peer dependency.
    *
    * @example
    * ```ts
@@ -334,12 +312,15 @@ export interface ResilientPublisher<T> {
    * Exposed so advanced consumers can reach the native API for cases the
    * wrapper does not cover, without losing the resilience layer on the happy
    * path.
+   *
+   * `undefined` before the first `publish()` call when no `pubSubClient` was
+   * provided (the topic is resolved lazily).
    */
   readonly topic: unknown;
 }
 
 // ============================================================================
-// Defaults
+// Built-in defaults
 // ============================================================================
 
 const DEFAULT_MAX_ATTEMPTS = 3;
@@ -391,18 +372,12 @@ function buildAttributes(
   schemaVersion: string | undefined,
   propagationOpts: PropagationOptions | undefined
 ): Record<string, string> {
-  // 1. Propagation — W3C trace + allowlisted business headers
   const propagated = injectContext(input.headers, propagationOpts);
-
-  // 2. Caller-supplied attributes (may overlap with propagated; caller wins)
   const callerAttrs = input.attributes ?? {};
-
-  // 3. Envelope attributes — content-type always set; schema-version when configured
   const envelopeAttrs: Record<string, string> = { 'content-type': contentType };
   if (schemaVersion !== undefined) {
     envelopeAttrs['schema-version'] = schemaVersion;
   }
-
   return { ...propagated, ...callerAttrs, ...envelopeAttrs };
 }
 
@@ -414,23 +389,27 @@ function buildAttributes(
  * Creates a {@link ResilientPublisher} that wraps a Pub/Sub topic with retry,
  * backoff, jitter, ordering-aware semantics, and context propagation.
  *
+ * When `pubSubClient` is not supplied, the publisher lazily resolves a shared
+ * default client on the first `publish()` call, reading GCP credentials from
+ * the standard environment (`GOOGLE_CLOUD_PROJECT` / ADC).
+ *
+ * Resilience knobs (`maxAttempts`, `strategy`, etc.) fall back to
+ * `RESILIENT_PUBSUB_*` environment variables when not supplied programmatically,
+ * then to built-in safe defaults. Precedence: programmatic > env > default.
+ *
  * @typeParam T - The type of the message body this publisher produces.
  * @param opts  - Publisher configuration.
  * @returns A `ResilientPublisher<T>` ready to use.
  *
- * @throws {ResilientPubSubError} `{ kind: 'config' }` on the first `publish()`
- *   call when `opts.pubSubClient` is not provided. (Default-client
- *   instantiation from environment variables lands in PR-8.)
+ * @throws {ResilientPubSubError} `{ kind: 'config' }` from `publish()` when
+ *   `pubSubClient` is omitted and `@google-cloud/pubsub` is not installed.
  *
- * @example Zero-config resilience (shared client)
+ * @example Zero-config (env-var credentials + default resilience knobs)
  * ```ts
- * import { PubSub } from '@google-cloud/pubsub';
  * import { createResilientPublisher } from 'resilient-pubsub/publisher';
  *
- * const publisher = createResilientPublisher<OrderCreated>({
- *   topic: 'orders',
- *   pubSubClient: new PubSub(),
- * });
+ * // Set GOOGLE_CLOUD_PROJECT in env (ADC handles credentials on GCP).
+ * const publisher = createResilientPublisher<OrderCreated>({ topic: 'orders' });
  *
  * try {
  *   await publisher.publish({ body: { orderId: '42' } });
@@ -442,18 +421,23 @@ function buildAttributes(
 export function createResilientPublisher<T>(opts: PublisherOptions<T>): ResilientPublisher<T> {
   const serializer: Serializer<T> = opts.serializer ?? (new JsonSerializer<T>() as Serializer<T>);
   const sleep = opts._sleep ?? defaultSleep;
+  const clientResolver = opts._clientResolver ?? getDefaultPubSubClient;
 
+  // Read env-var config once at construction time (lenient — all may be undefined).
+  const envConfig = resolveConfigFromEnv();
   const retryOpts = opts.retry ?? {};
-  const maxAttempts = retryOpts.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
-  const strategy = retryOpts.strategy ?? DEFAULT_STRATEGY;
-  const initialDelay = retryOpts.initialDelay ?? DEFAULT_INITIAL_DELAY;
-  const maxDelay = retryOpts.maxDelay ?? DEFAULT_MAX_DELAY;
-  const multiplier = retryOpts.multiplier ?? DEFAULT_MULTIPLIER;
-  const jitter = retryOpts.jitter ?? DEFAULT_JITTER;
 
-  // Resolve the native topic handle once at construction time — if no client
-  // was provided the error is deferred to the first publish() call so the
-  // caller can construct the publisher before the client is ready.
+  // Resolution precedence: programmatic > env > built-in default.
+  const maxAttempts = retryOpts.maxAttempts ?? envConfig.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
+  const strategy = retryOpts.strategy ?? envConfig.strategy ?? DEFAULT_STRATEGY;
+  const initialDelay = retryOpts.initialDelay ?? envConfig.initialDelay ?? DEFAULT_INITIAL_DELAY;
+  const maxDelay = retryOpts.maxDelay ?? envConfig.maxDelay ?? DEFAULT_MAX_DELAY;
+  const multiplier = retryOpts.multiplier ?? envConfig.multiplier ?? DEFAULT_MULTIPLIER;
+  const jitter = retryOpts.jitter ?? envConfig.jitter ?? DEFAULT_JITTER;
+
+  // When a client is provided at construction, resolve the topic immediately.
+  // When no client is provided, topic resolution is deferred to the first
+  // publish() call so the factory itself never throws.
   let nativeTopic: TopicLike | undefined;
 
   if (opts.pubSubClient !== undefined) {
@@ -464,17 +448,31 @@ export function createResilientPublisher<T>(opts: PublisherOptions<T>): Resilien
     nativeTopic = opts.pubSubClient.topic(opts.topic, topicOpts);
   }
 
+  /**
+   * Resolves the native topic handle, lazily creating the default client when
+   * no explicit client was provided.
+   *
+   * @internal
+   */
+  async function resolveNativeTopic(): Promise<TopicLike> {
+    if (nativeTopic !== undefined) return nativeTopic;
+
+    // Lazy path: resolve + cache the default client, then obtain the topic.
+    const client = await clientResolver();
+    const topicOpts: Record<string, unknown> = {};
+    if (opts.ordering === true) {
+      topicOpts['enableMessageOrdering'] = true;
+    }
+    // Cache so that subsequent publishes do not re-resolve the client.
+    nativeTopic = client.topic(opts.topic, topicOpts);
+    return nativeTopic;
+  }
+
   // ── Publish implementation ─────────────────────────────────────────────────
 
   async function publish(input: PublishInput<T>): Promise<PublishResult> {
-    if (nativeTopic === undefined) {
-      throw new ResilientPubSubError(
-        `No Pub/Sub client provided. Pass a 'pubSubClient' to createResilientPublisher ` +
-          `(topic: '${opts.topic}'). Default-client instantiation from environment ` +
-          `variables lands in a future release.`,
-        { kind: 'config', classification: 'permanent', retryable: false }
-      );
-    }
+    // Resolve topic on first publish (lazy client path OR already resolved).
+    const topic = await resolveNativeTopic();
 
     const data = Buffer.from(serializer.serialize(input.body));
     const attributes = buildAttributes(
@@ -489,7 +487,7 @@ export function createResilientPublisher<T>(opts: PublisherOptions<T>): Resilien
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
-        const messageId = await nativeTopic.publishMessage({
+        const messageId = await topic.publishMessage({
           data,
           attributes,
           orderingKey: input.orderingKey,
@@ -502,12 +500,10 @@ export function createResilientPublisher<T>(opts: PublisherOptions<T>): Resilien
 
         const classification = classify(err);
 
-        // Permanent / poison / unknown → reject immediately, no retries wasted
+        // Permanent / poison / unknown → reject immediately, no wasted retries
         if (classification !== 'transient') {
-          // For ordering: resume so the key is not left blocked even on a
-          // permanent failure (the caller may retry with a corrected message).
           if (opts.ordering === true && input.orderingKey !== undefined) {
-            nativeTopic.resumePublishing(input.orderingKey);
+            topic.resumePublishing(input.orderingKey);
           }
 
           throw new ResilientPubSubError(
@@ -520,9 +516,9 @@ export function createResilientPublisher<T>(opts: PublisherOptions<T>): Resilien
         // Transient — check if we have retries left
         if (attempt === maxAttempts) break;
 
-        // Resume ordering key after a transient failure so it is not blocked
+        // Resume ordering key after transient failure so it is not blocked
         if (opts.ordering === true && input.orderingKey !== undefined) {
-          nativeTopic.resumePublishing(input.orderingKey);
+          topic.resumePublishing(input.orderingKey);
         }
 
         // Compute jittered delay
@@ -536,7 +532,7 @@ export function createResilientPublisher<T>(opts: PublisherOptions<T>): Resilien
       }
     }
 
-    // Retry budget exhausted — surface a typed publish error
+    // Retry budget exhausted
     throw new ResilientPubSubError(
       `Publish failed after ${maxAttempts} attempts (topic: '${opts.topic}')`,
       { kind: 'publish', cause: lastError, classification: 'transient' }
