@@ -13,7 +13,7 @@ import assert from 'node:assert/strict';
 
 test('root barrel re-exports the sub-module placeholders', async () => {
   const mod = await import('../src/index.ts');
-  assert.equal(mod._coreVersion, '0.0.0');
+  // _coreVersion removed — core placeholder replaced by real exports in PR-2.
   assert.equal(mod._errorsVersion, '0.0.0');
   assert.equal(mod._idempotencyVersion, '0.0.0');
   assert.equal(mod._publisherVersion, '0.0.0');
