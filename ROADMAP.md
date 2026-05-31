@@ -54,3 +54,86 @@ decisions are not lost.
   hooks, with no SDK dependency. v0.2 may add an *optional* bridge that creates
   spans automatically via `@opentelemetry/api` (an optional peer) for teams that
   want it turnkey — the core stays dependency-free and backend-neutral.
+
+## Deferred: Native Pub/Sub schemas & Avro (revisit after v0.1 base is stable and tested)
+
+**Status:** deferred by design. Do not start until the v0.1 base (publishing,
+subscriber lifecycle, envelopes, propagation, dead-letter, hooks) is complete,
+green in the e2e consumer repos, and proven in real use. New features go to the
+roadmap; the base must be solid first.
+
+**Why this needs its own design pass:** Pub/Sub has *native* schema support that
+partially overlaps with our message-contract concern. We must define the
+relationship before writing any code, or we risk competing with a server-side
+feature instead of complementing it.
+
+### Established facts (so we don't re-derive them)
+
+- **Native validation is server-side, at publish time**, against a schema
+  attached to the topic. It works for any client/language — even a raw REST
+  publish is validated. It is an *ingress* control on the topic.
+- **Formats are Avro or Protobuf**, with **JSON or BINARY** encoding. These are
+  not arbitrary TypeScript types.
+- **The consume side is the gap.** Pub/Sub does **not** validate or decode on
+  delivery — the subscriber receives bytes. For Avro with revisions, the consumer
+  must fetch the *writer* schema (identified via message attributes) and resolve
+  it against its compiled *reader* schema. GCP leaves this entirely to the app.
+- **Schema evolution is GA** via *revisions*: compatible changes (add/remove
+  optional fields) are allowed, and a topic can accept a range of revisions,
+  enabling zero-downtime migration.
+- **The schema validates the message body (data), not attributes.** Our
+  `headers → attributes` mapping is therefore orthogonal to native validation and
+  is unaffected by it.
+
+References to re-check when revisiting (GCP changes):
+- Pub/Sub schema evolution (GA): https://cloud.google.com/blog/products/data-analytics/pub-sub-schema-evolution-is-now-ga
+- Pub/Sub schemas docs: https://cloud.google.com/pubsub/docs/schemas
+
+### Architectural stance (the layering decision)
+
+Native schemas and our optional validator are **different layers — they compose,
+they do not compete:**
+
+- **Transport layer — native Pub/Sub schemas (the user's choice, on the topic).**
+  Validates the body at publish, server-side. If a topic has a schema and a
+  publish violates it, the publish is rejected — which our publisher already
+  surfaces as a `ResilientPubSubError` (we never swallow it). The library
+  *respects* this; it does not manage or abstract it.
+- **Library layer — our optional consume-side validator.** Covers the side GCP
+  leaves empty (no consume-side validation). This is the validator's real niche:
+  it removes defensive shape-checking from every handler. It is **not** redundant
+  with native schemas because native validation never runs on consume.
+
+### Candidate scope (for the future feature)
+
+- Optional **Avro reader/writer schema resolution on consume** — the genuine GCP
+  gap — delivered as a **separate, opt-in extension package**, never in the
+  zero-dep core (it requires an Avro dependency).
+
+### Non-goals to preserve
+
+- The **core stays JSON + TS types, zero runtime dependencies.**
+- **No binary Avro/Protobuf encoding in the core** (would pull in a dependency
+  and re-implement GCP's job).
+- The library **does not abstract or manage native schemas** — they remain an
+  orthogonal, topic-level feature owned by the user.
+
+### Open questions to resolve before building
+
+1. **Reconcile the envelope's `schema-version` marker with native revisions.**
+   When native schemas are used, Pub/Sub already injects a schema + revision
+   identifier into the message attributes. Our hand-rolled `schema-version` would
+   then be a *second*, parallel version identifier that can diverge. Decide which
+   is authoritative: our marker for schema-less topics (likely the default), the
+   native identifier when a schema is attached. Document the rule.
+2. **Reconcile two compatibility strategies.** Shared TS types give *compile-time*
+   safety only within a shared type boundary (monorepo / shared package); native
+   schema revisions give *runtime* evolution across independent services. These
+   can contradict each other (a backward-compatible field add is valid under
+   revisions but invisible to a consumer's stale TS copy). Clarify which strategy
+   the library assumes/recommends, and condition the "publisher changes shape →
+   consumer won't compile" claim on shared types.
+3. **Evaluate JSON-encoded Avro as a lightweight middle ground.** Avro with JSON
+   encoding can validate JSON bodies without binary serialization — but parsing
+   the schema still needs an Avro library, so it stays out of the zero-dep core.
+   Decide if it's worth an extension or not worth it at all.
