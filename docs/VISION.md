@@ -45,9 +45,9 @@ heavier guarantee:
 That is the spine. Everything else (retry on publish, dead-letter on repeated
 failure, context propagation, observability) hangs off it. The library does not
 try to invent exactly-once processing or hide the at-least-once nature of
-Pub/Sub — it makes the at-least-once lifecycle correct, observable, and
-ergonomic, and it is honest that **deduplication of business effects is the
-application's responsibility** (see below).
+Pub/Sub — it makes the at-least-once lifecycle correct, observable, and ergonomic.
+Deduplicating business effects remains the application's responsibility; see
+[Idempotency is a shared responsibility](#idempotency-is-a-shared-responsibility).
 
 ## What this library is
 
@@ -62,19 +62,24 @@ A transparent, framework-agnostic resilience layer that wraps the official
    library just exposes the option and handles resume correctly.
 2. **A correct subscriber lifecycle** — a handler that throws becomes a `nack`
    (redelivery); a handler that resolves becomes an `ack`. Flow control
-   (`maxOutstandingMessages` / `maxOutstandingBytes`) is documented pass-through,
-   and the ack deadline is extended automatically while a slow handler is still
-   running, so long processing does not trigger premature redelivery.
+   (`maxOutstandingMessages` / `maxOutstandingBytes`) and ack-deadline extension
+   are **the native client's own lease management** (it modacks automatically up
+   to `maxExtension`); the library exposes these as documented pass-through with
+   sensible defaults rather than reimplementing them. The value the library adds
+   here is the ergonomic throw→nack / resolve→ack wiring, not the lease
+   machinery — that heavy lifting is the native client's.
 3. **Structured envelopes** — a typed `Envelope<T>` plus a pluggable
    `Serializer<T>` (JSON by default), with content-type and schema-version
    carried in attributes.
 4. **Context and header propagation across the hop** — on publish, the library
-   writes the inbound trace context (W3C `traceparent` / `tracestate` /
-   `baggage`) and any caller-provided business headers into the message
-   attributes; on consume, it extracts them and exposes them to the handler. The
-   trace and the headers survive the publisher → message → consumer hop. This is
-   pure string marshalling following the W3C standard — **zero dependencies, no
-   OpenTelemetry SDK required**.
+   writes W3C trace-correlation context (`traceparent` / `tracestate`) into the
+   message attributes; on consume, it extracts it and exposes it to the handler,
+   so the trace survives the publisher → message → consumer hop. This is pure
+   string marshalling following the W3C standard — **zero dependencies, no
+   OpenTelemetry SDK required**. Header propagation is governed by a **safe
+   allowlist** and `baggage` is **off by default** — see
+   [Propagation safety](#propagation-safety-no-pii-on-the-wire); attributes are
+   an unredacted channel, so what travels is controlled, not arbitrary.
 5. **Dead-letter handling** — native `deadLetterPolicy` pass-through. Dead-letter
    support is **opt-in**: a subscriber that does not configure it pays no cost and
    runs no checks. The `delivery_attempt` count is surfaced on the envelope.
@@ -86,27 +91,40 @@ A transparent, framework-agnostic resilience layer that wraps the official
 7. **A safe, standardized error surface** — `ResilientPubSubError` with explicit
    kinds and a `toJSON()` that never leaks secrets or PII by default.
 
-## Idempotency is a shared responsibility (and mostly the application's)
+## Propagation safety: no PII on the wire
 
-This section exists so no one is misled in production.
+Message attributes are an **unredacted channel**: they travel over the wire, land
+in logs, and are copied to the dead-letter topic. That makes propagation a
+security decision, not just an ergonomics one — especially for a payments
+context. The library is deliberately strict here, to match the same standard it
+applies to error output.
+
+- **Trace correlation propagates automatically.** `traceparent` and `tracestate`
+  are W3C correlation identifiers, not user data, so they are propagated by
+  default.
+- **Business headers propagate by allowlist only.** The library never copies
+  arbitrary caller headers into attributes. A **default allowlist** ships with
+  the safe standard correlation headers already included; the caller extends it
+  with the specific business headers they want to travel. Anything not on the
+  allowlist does not cross the hop.
+- **W3C `baggage` is off by default.** `baggage` is the classic vector for
+  accidental PII leakage (teams stuff sensitive values into it and it propagates
+  everywhere). It is opt-in, and the documentation states plainly: **do not put
+  PII in baggage or in propagated headers** — attributes are not redacted.
+
+This keeps the promise symmetric: the library is as careful with what leaves on
+the message as it is with what leaves in an error.
+
+## Idempotency is a shared responsibility
 
 Pub/Sub is **at-least-once**: a handler that succeeded but whose `ack` was lost
 (crash, network, or an expired ack deadline) will be **redelivered and run
-again**; and near the ack deadline the same message can be delivered to two
-workers at once. The library makes the *lifecycle* correct — failure reliably
-repeats, success reliably acks — but it **cannot make a non-idempotent business
-effect safe to run twice**. That is the application's job, because only the
-application knows what a duplicate means for its domain.
-
-The honest division of labour:
-
-- **The library guarantees** the ack/nack contract: a failed handler is retried,
-  a succeeded handler is acked, slow handlers keep their lease via deadline
-  extension, and repeated poison failures route to the dead-letter topic.
-- **The application is responsible** for making its effects tolerate
-  at-least-once delivery — typically by making the effect idempotent
-  (deterministic keys, upserts/`PUT`, "insert if not exists") so that a
-  redelivery reproduces the same result instead of a double effect.
+again**; near the ack deadline the same message can even reach two workers at
+once. The library makes the *lifecycle* correct — failure reliably repeats,
+success reliably acks — but it **cannot make a non-idempotent business effect
+safe to run twice**. Only the application knows what a duplicate means for its
+domain, so making effects tolerate redelivery (deterministic keys, upserts/`PUT`,
+"insert if not exists") is the application's job.
 
 **Why there is no built-in deduplication store in v0.1.** A generic dedup store
 (e.g., a Redis "already processed" marker) helps in exactly one narrow case: the
@@ -153,9 +171,12 @@ These are inherited directly from `resilient-http`, the sibling library.
   OpenTelemetry SDK dependency**.
 - **Security-first, in every sense.** Secrets (GCP key paths, and — if the dedup
   tool lands — Redis URLs with credentials) and PII are redacted from error
-  output by default. The message body is never serialized into error JSON unless
-  explicitly opted in. Supply-chain hygiene is part of the contract: GitHub
-  Actions pinned by commit SHA, dependency review, and provenance on publish.
+  output by default, and propagation onto message attributes is allowlist-gated
+  so the unredacted-channel risk is controlled too (see
+  [Propagation safety](#propagation-safety-no-pii-on-the-wire)). The message body
+  is never serialized into error JSON unless explicitly opted in. Supply-chain
+  hygiene is part of the contract: GitHub Actions pinned by commit SHA, dependency
+  review, and provenance on publish.
 - **Honest guarantees over marketing.** The library states what it can and
   cannot guarantee — it makes the at-least-once lifecycle correct and observable,
   and it never claims exactly-once processing. It would rather under-promise and
@@ -176,10 +197,13 @@ These are inherited directly from `resilient-http`, the sibling library.
 - It is **not** a message broker or a Pub/Sub replacement.
 - It does **not** abstract Pub/Sub behind a generic multi-broker interface. It is
   Pub/Sub-specific on purpose.
-- It does **not** guarantee exactly-once processing, and it does **not**
-  deduplicate business effects for you. It makes the at-least-once lifecycle
-  correct; your effects must tolerate redelivery (idempotent sinks) — that is the
-  application's responsibility.
+- It does **not** guarantee exactly-once processing or deduplicate business
+  effects for you — your effects must tolerate redelivery. See
+  [Idempotency is a shared responsibility](#idempotency-is-a-shared-responsibility).
+- It does **not** validate or migrate message schemas. The envelope carries a
+  `schema-version` marker across the hop, but acting on a version mismatch on
+  consume — rejecting, routing, or migrating — is the application's
+  responsibility; the library only transports the marker.
 - It does **not** create spans or depend on an observability SDK. It transports
   trace context and exposes neutral hooks; you wire your own backend.
 - It does **not** provision infrastructure (topics, subscriptions, IAM). It
@@ -189,13 +213,19 @@ These are inherited directly from `resilient-http`, the sibling library.
 ## Scope
 
 **v0.1 (current cycle):** resilient publishing (retry/backoff/jitter,
-ordering-aware), a correct subscriber lifecycle (ack/nack, flow-control
-pass-through, ack-deadline extension), structured envelopes, **context + header
-propagation across publisher and consumer** (zero-dep, W3C), **opt-in native**
-dead-letter support, neutral observability hooks, and a safe error surface —
-plus complete documentation, end-to-end tests against the Pub/Sub emulator, and
-full governance (security policy, contributing guide, Dependabot, branch
-protection).
+ordering-aware), a correct subscriber lifecycle (ack/nack wiring over the native
+client's flow-control and ack-deadline lease management), structured envelopes,
+**allowlist-gated context + header propagation across publisher and consumer**
+(zero-dep, W3C), **opt-in native** dead-letter support, neutral observability
+hooks, and a safe error surface — plus complete documentation, end-to-end tests
+against the Pub/Sub emulator, and full governance (security policy, contributing
+guide, Dependabot, branch protection).
+
+The **two consumer repositories** are the project's own end-to-end proof
+(dogfooding): `resilient-pubsub-e2e` exercises the library from a plain Node
+worker, and `resilient-pubsub-e2e-nestjs` exercises it inside a NestJS app — both
+against the Pub/Sub emulator in CI. They demonstrate the framework-agnostic
+claim and enforce the ergonomics budget on real consumer code.
 
 **Deferred (see `ROADMAP.md`):**
 
