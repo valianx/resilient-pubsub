@@ -10,6 +10,7 @@
  * - `resilient-pubsub/subscriber`   — resilient message consumption
  * - `resilient-pubsub/idempotency`  — idempotency store abstractions
  * - `resilient-pubsub/idempotency/redis` — Redis-backed idempotency store
+ * - `resilient-pubsub/dlq`          — native dead-letter policy builder (opt-in)
  * - `resilient-pubsub/core`         — backoff/jitter primitives
  * - `resilient-pubsub/envelope`     — structured message envelope codec
  * - `resilient-pubsub/errors`       — error types and classification
@@ -25,7 +26,9 @@
 export * from './publisher/index';
 export * from './subscriber/index';
 export * from './idempotency/index';
+export * from './dlq/index';
 export * from './core/index';
 export * from './envelope/index';
 export * from './errors/index';
 export * from './propagation/index';
+export * from './config/index';

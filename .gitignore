@@ -2,7 +2,14 @@
 node_modules/
 
 # Build output
-dist/
+# NOTE: during the pre-release phase dist/ is COMMITTED so the package can be
+# consumed as a git dependency (github:valianx/resilient-pubsub#sha) without a
+# rebuild on the consumer — the tsup DTS rollup is flaky in the Linux git-prepare
+# sandbox (CI), even though it builds fine locally and in this repo's own CI.
+# Only sourcemaps are ignored to keep the tree lean. At npm-publish this is
+# reverted: dist/ goes back to fully ignored and prepublishOnly rebuilds it.
+dist/*.map
+dist/**/*.map
 
 # IDE
 .idea/
