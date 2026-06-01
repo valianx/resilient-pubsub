@@ -3,10 +3,6 @@
 A transparent, framework-agnostic resilience layer around `@google-cloud/pubsub`.  
 Zero runtime dependencies in the core; `@google-cloud/pubsub` is the only required peer. It wraps the official client transparently — it never takes the transport away from you.
 
-> **Implemented, not yet published.** The v0.1 API is implemented and tested; the
-> package is not yet on npm. Install instructions below show the intended form
-> once published.
-
 ## Features
 
 - **Resilient publish**: retry with exponential / linear / constant backoff and full / equal / decorrelated jitter

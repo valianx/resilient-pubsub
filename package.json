@@ -1,6 +1,6 @@
 {
   "name": "resilient-pubsub",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "A transparent, framework-agnostic resilience layer around @google-cloud/pubsub: structured envelopes, retries with backoff/jitter, native dead-letter support.",
   "packageManager": "pnpm@11.1.3",
   "author": "valianx",
