@@ -1,7 +1,7 @@
 import { S as Serializer } from '../serializer-DAvAnges.js';
 import { R as ResilientPubSubError } from '../error-BUmovVYN.js';
 import { Headers, PropagationOptions } from '../propagation/index.js';
-import { E as EnvelopeMeta } from '../index-BCwaxBg3.js';
+import { E as EnvelopeMeta } from '../index-Da6vKBeR.js';
 import { S as SubscriberFlowControlLike, a as SubscriberPubSubLike } from '../pubsub-h9anVIwg.js';
 export { A as AckableMessage, b as SubscriptionLike } from '../pubsub-h9anVIwg.js';
 import '../classify-mrmGdAaM.js';

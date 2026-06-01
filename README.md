@@ -1,46 +1,27 @@
 # Resilient PubSub
 
-A transparent, framework-agnostic resilience layer around `@google-cloud/pubsub`.
-
-> **Under active development — not ready for production use.**
->
-> v0.0.0 is pre-release. APIs may change without notice until the first stable
-> release. The package is not yet published to npm. Install instructions below
-> show the intended form once published.
-
-[![npm version](https://img.shields.io/npm/v/resilient-pubsub.svg)](https://www.npmjs.com/package/resilient-pubsub)
-[![CI](https://github.com/valianx/resilient-pubsub/actions/workflows/ci.yml/badge.svg)](https://github.com/valianx/resilient-pubsub/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.3%2B-blue.svg)](https://www.typescriptlang.org/)
-
-Zero runtime dependencies in the core, with `@google-cloud/pubsub` as the only
-required peer. It wraps the official client transparently — it never takes the
-transport away from you.
+A transparent, framework-agnostic resilience layer around `@google-cloud/pubsub`.  
+Zero runtime dependencies in the core; `@google-cloud/pubsub` is the only required peer. It wraps the official client transparently — it never takes the transport away from you.
 
 ## Features
 
-- **Resilient publish** — retry with exponential / linear / constant backoff and full / equal / decorrelated jitter
-- **Correct ack/nack lifecycle** — handler throws → nack (retry); handler returns → ack (done); `stop()` drains gracefully
-- **Symmetric typed envelope** — publish `{ body, headers }`, receive `{ body, headers, meta }` — one shape, learned once
-- **W3C context propagation** — trace context and allowlisted business headers cross the message hop automatically, zero dependencies
-- **Opt-in native dead-letter** — native `deadLetterPolicy` pass-through with `deliveryAttempt` surfaced on the envelope
-- **Safe error surface** — `ResilientPubSubError` with explicit kinds, classifications, and `toJSON()` that never leaks secrets or PII
-- **TypeScript-first** — full type definitions included; publisher and subscriber share the same typed `T`
-- **Zero-dep core** — backoff, jitter, envelope, errors, and propagation have zero runtime dependencies; tree-shakeable
+- **Resilient publish**: retry with exponential / linear / constant backoff and full / equal / decorrelated jitter
+- **Correct ack/nack lifecycle**: handler throws → nack (retry); handler returns → ack (done); `stop()` drains gracefully
+- **Symmetric typed envelope**: publish `{ body, headers }`, receive `{ body, headers, meta }` — one shape, learned once
+- **W3C context propagation**: trace context and allowlisted business headers cross the message hop automatically
+- **Opt-in native dead-letter**: native dead-letter policy pass-through with `deliveryAttempt` surfaced on the envelope
+- **Safe Errors**: `ResilientPubSubError` with explicit kinds, classifications, and a safe-by-default `toJSON()` that never leaks secrets or PII
+- **TypeScript First**: full type definitions included; publisher and subscriber share the same typed `T`
+- **Zero Dependencies**: zero-dependency, tree-shakeable core (backoff, jitter, envelope, errors, propagation)
 
 ## Installation
 
-Once published:
-
 ```bash
-# pnpm (recommended)
+# pnpm
 pnpm add resilient-pubsub @google-cloud/pubsub
 
 # npm
 npm install resilient-pubsub @google-cloud/pubsub
-
-# yarn
-yarn add resilient-pubsub @google-cloud/pubsub
 ```
 
 `@google-cloud/pubsub` **^5.x** is a required peer dependency.  
@@ -55,7 +36,6 @@ Retry, backoff, jitter, and context propagation are on by default.
 if it exhausts retries — it never silently drops an event.
 
 ```typescript
-// Target v0.1 API (see docs/VISION.md) — publisher implementation in progress.
 import { createResilientPublisher } from 'resilient-pubsub';
 
 const publisher = createResilientPublisher<OrderCreated>({ topic: 'orders' });
@@ -77,7 +57,6 @@ Throw → nack (retry). Return → ack (done). The library catches your handler'
 throw — do not write try/catch in the handler body.
 
 ```typescript
-// Target v0.1 API (see docs/VISION.md) — subscriber implementation in progress.
 import { createResilientSubscriber } from 'resilient-pubsub';
 
 const worker = createResilientSubscriber<OrderCreated>({
@@ -127,6 +106,8 @@ module/realm boundaries. See the full error reference and the `SerializationErro
 poison-message pattern in [docs/api-reference.md](./docs/api-reference.md#3-error-surface)
 and [docs/use-cases/06-error-handling.ts](./docs/use-cases/06-error-handling.ts).
 
+---
+
 ## Documentation
 
 ### [docs/VISION.md](./docs/VISION.md) — Design intent, guarantees, and honest limits
@@ -152,47 +133,35 @@ context propagation, backoff/jitter algorithms, hooks, and testing.
 
 ### [docs/use-cases/](./docs/use-cases/) — Runnable examples
 
-| File | Feature illustrated | Status |
-|------|---------------------|--------|
-| [01-quickstart-publisher.ts](./docs/use-cases/01-quickstart-publisher.ts) | `createResilientPublisher` + `publish` + error handling | Target v0.1 |
-| [02-quickstart-subscriber.ts](./docs/use-cases/02-quickstart-subscriber.ts) | `createResilientSubscriber` + handler + `start()` + SIGTERM | Target v0.1 |
-| [03-message-envelope.ts](./docs/use-cases/03-message-envelope.ts) | `Envelope` outbound/inbound, `JsonSerializer`, custom `Serializer` | Implemented |
-| [04-backoff-strategies.ts](./docs/use-cases/04-backoff-strategies.ts) | `calculateBackoff` across exponential / linear / constant | Implemented |
-| [05-jitter.ts](./docs/use-cases/05-jitter.ts) | `applyJitter` across full / equal / decorrelated / none | Implemented |
-| [06-error-handling.ts](./docs/use-cases/06-error-handling.ts) | `ResilientPubSubError` kinds, `isResilientPubSubError`, `toJSON()` | Implemented |
-| [07-context-propagation.ts](./docs/use-cases/07-context-propagation.ts) | `injectContext` / `extractContext`, allowlist, baggage, cross-hop | Implemented |
-| [08-dead-letter.ts](./docs/use-cases/08-dead-letter.ts) | Native `deadLetterPolicy`, `onPoison` hook, `deliveryAttempt` | Target v0.1 |
-| [09-graceful-shutdown.ts](./docs/use-cases/09-graceful-shutdown.ts) | `stop()` drain wired to SIGTERM/SIGINT | Target v0.1 |
-| [10-deployment-patterns.ts](./docs/use-cases/10-deployment-patterns.ts) | Publisher-only / consumer-only / both; subpath imports; shared client | Target v0.1 |
+Each file demonstrates one tool or feature in isolation.
+
+| File | Feature illustrated |
+|---|---|
+| [`01-quickstart-publisher.ts`](./docs/use-cases/01-quickstart-publisher.ts) | `createResilientPublisher` + `publish` + error handling |
+| [`02-quickstart-subscriber.ts`](./docs/use-cases/02-quickstart-subscriber.ts) | `createResilientSubscriber` + handler + `start()` + SIGTERM |
+| [`03-message-envelope.ts`](./docs/use-cases/03-message-envelope.ts) | `Envelope` outbound/inbound, `JsonSerializer`, custom `Serializer` |
+| [`04-backoff-strategies.ts`](./docs/use-cases/04-backoff-strategies.ts) | `calculateBackoff` across exponential / linear / constant |
+| [`05-jitter.ts`](./docs/use-cases/05-jitter.ts) | `applyJitter` across full / equal / decorrelated / none |
+| [`06-error-handling.ts`](./docs/use-cases/06-error-handling.ts) | `ResilientPubSubError` kinds, `isResilientPubSubError`, `toJSON()` |
+| [`07-context-propagation.ts`](./docs/use-cases/07-context-propagation.ts) | `injectContext` / `extractContext`, allowlist, baggage, cross-hop |
+| [`08-dead-letter.ts`](./docs/use-cases/08-dead-letter.ts) | Native dead-letter policy builder, `onPoison` hook, `deliveryAttempt` |
+| [`09-graceful-shutdown.ts`](./docs/use-cases/09-graceful-shutdown.ts) | `stop()` drain wired to SIGTERM/SIGINT |
+| [`10-deployment-patterns.ts`](./docs/use-cases/10-deployment-patterns.ts) | Publisher-only / consumer-only / both; subpath imports; shared client |
 
 ### [ROADMAP.md](./ROADMAP.md) — Versioned feature plan
 
 What ships in v0.1, what is deferred to v0.2, and the definition of done for
 the first public release.
 
+---
+
 ## Contributing
 
 Contributions are welcome. The library is framework-agnostic and zero-dependency
-in the core by design — orchestration patterns belong in consumer code. Please
-read [CONTRIBUTING.md](./CONTRIBUTING.md) for setup, conventions, and the PR
-process.
+in the core by design — orchestration patterns belong in consumer code (see
+[`docs/use-cases/`](./docs/use-cases/)). Please read [CONTRIBUTING.md](./CONTRIBUTING.md)
+for setup, conventions, and the PR process.
 
 ## License
 
 MIT
-
----
-
-## En español / In English
-
-**🇪🇸** `resilient-pubsub` es una capa de resiliencia transparente alrededor del cliente
-oficial `@google-cloud/pubsub`. Agrega reintentos con backoff y jitter, un ciclo de vida
-correcto de ack/nack, envelopes tipados y simétricos (`{ body, headers }`), propagación de
-contexto W3C entre saltos, soporte nativo de dead-letter y una superficie de error segura —
-todo sin dependencias en tiempo de ejecución en el núcleo.
-
-**🇬🇧** `resilient-pubsub` is a transparent resilience layer around the official
-`@google-cloud/pubsub` client. It adds retry with backoff and jitter, a correct ack/nack
-lifecycle, typed symmetric envelopes (`{ body, headers }`), W3C context propagation across
-message hops, opt-in native dead-letter support, and a safe error surface — all with zero
-runtime dependencies in the core.

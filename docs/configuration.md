@@ -68,7 +68,9 @@ const orders = createResilientPublisher<OrderCreated>({ topic: 'orders' });
 try {
   await orders.publish({
     body: { orderId: '42' },
-    headers: { traceId: 'abc-123' },
+    // Only allowlisted headers cross the hop. Use an explicit allowlist for
+    // business headers; traceparent / tracestate propagate automatically.
+    headers: { 'x-correlation-id': 'abc-123' },
   });
 } catch (err) {
   // permanent publish failure — alert / persist / fail the request

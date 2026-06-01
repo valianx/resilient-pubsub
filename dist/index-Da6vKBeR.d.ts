@@ -2,7 +2,7 @@
  * Core public type definitions for resilient-pubsub.
  *
  * Types defined here are cross-module and shared across envelope, publisher,
- * subscriber, idempotency, and error modules. Module-specific types may live
+ * subscriber, and error modules. Module-specific types may live
  * in their own files and be re-exported from here for convenience.
  *
  * @module types

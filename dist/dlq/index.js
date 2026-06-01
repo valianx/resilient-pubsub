@@ -77,11 +77,12 @@ var REDIS_URL_PATTERN = /rediss?:\/\/([^@\s]+@)/gi;
 var GCP_KEYFILE_PATTERN = /(?:keyFile(?:name)?|credentialsFile|serviceAccountKey)\s*[:=]\s*["']?[^\s"',;)]+["']?/gi;
 var PRIVATE_KEY_BLOCK_PATTERN = /-----BEGIN [A-Z ]+KEY-----[\s\S]*?-----END [A-Z ]+KEY-----/g;
 var PRIVATE_KEY_FIELD_PATTERN = /"private_key"\s*:\s*"[^"]+"/g;
+var MAX_REDACT_INPUT = 8192;
 function redactSecrets(text) {
-  let result = text;
+  let result = text.length > MAX_REDACT_INPUT ? text.slice(0, MAX_REDACT_INPUT) : text;
   result = result.replace(REDIS_URL_PATTERN, (match, userinfo) => {
     try {
-      const urlStr = match.endsWith(userinfo) ? match : match;
+      const urlStr = match;
       const withoutUserinfo = match.replace(userinfo, `${REDACTED}@`);
       const scheme = urlStr.startsWith("rediss") ? "rediss://" : "redis://";
       const hostPart = withoutUserinfo.slice(scheme.length).replace(`${REDACTED}@`, "");
@@ -146,7 +147,7 @@ var ResilientPubSubError = class extends (_b = Error, _a = BRAND, _b) {
    * ```
    */
   toJSON() {
-    const safe = capMessage(redactSecrets(this.message));
+    const safe = redactSecrets(capMessage(this.message));
     const base = {
       name: this.name,
       kind: this.kind,

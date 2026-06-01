@@ -1,8 +1,6 @@
 /**
  * 02-quickstart-subscriber.ts
  *
- * // Target v0.1 API (see docs/VISION.md) — subscriber implementation in progress.
- *
  * Tool: createResilientSubscriber — minimal subscriber setup.
  *
  * Contract (v0.1 target):
@@ -23,7 +21,6 @@
  *   GOOGLE_APPLICATION_CREDENTIALS=...  (or Workload Identity)
  */
 
-// Target v0.1 API (see docs/VISION.md) — subscriber implementation in progress.
 import { createResilientSubscriber } from 'resilient-pubsub';
 
 // ---------------------------------------------------------------------------

@@ -1,15 +1,13 @@
 /**
  * 08-dead-letter.ts
  *
- * // Target v0.1 API (see docs/VISION.md) — subscriber implementation in progress.
- *
- * Tools: createResilientSubscriber with deadLetterPolicy, onPoison hook,
- *        deliveryAttempt on meta.
+ * Tools: withDeadLetter / buildDeadLetterPolicy (resilient-pubsub/dlq),
+ *        onPoison hook (hooks.onPoison), deliveryAttempt on msg.meta.
  *
  * Dead-letter handling is opt-in: a subscriber that does not configure it
  * pays no cost and runs no checks. A subscriber that opts in declares it
- * explicitly; the library surfaces delivery_attempt on msg.meta and fires
- * the onPoison / onDeadLetter hooks at the right moments.
+ * explicitly via the DLQ builder; the library surfaces delivery_attempt on
+ * msg.meta and fires the onPoison hook when a message is undeserializable.
  *
  * Native deadLetterPolicy setup (must be done once, outside the library):
  *   - Create a dead-letter topic in Pub/Sub.
@@ -27,8 +25,8 @@
  * nacks and Pub/Sub counts the delivery attempt.
  */
 
-// Target v0.1 API (see docs/VISION.md) — subscriber implementation in progress.
 import { createResilientSubscriber } from 'resilient-pubsub';
+import { withDeadLetter } from 'resilient-pubsub/dlq';
 import { isResilientPubSubError } from 'resilient-pubsub/errors';
 
 // ---------------------------------------------------------------------------
@@ -42,47 +40,41 @@ interface PaymentEvent {
 }
 
 // ---------------------------------------------------------------------------
-// Example A: subscriber with deadLetterPolicy opt-in.
+// Example A: subscriber with dead-letter policy via withDeadLetter builder.
 // ---------------------------------------------------------------------------
 
 /**
- * Opts into native dead-letter support. The subscription must already have
- * deadLetterPolicy configured in Pub/Sub (this is infrastructure, not code).
+ * Opts into native dead-letter support using the withDeadLetter builder.
+ * The subscription must already have deadLetterPolicy configured in Pub/Sub
+ * (this is infrastructure, not code).
  *
  * After maxDeliveryAttempts failures, Pub/Sub moves the message to the
- * dead-letter topic automatically. onDeadLetter fires when the library
- * detects delivery_attempt >= maxDeliveryAttempts.
+ * dead-letter topic automatically. The onPoison hook fires when the library
+ * detects a SerializationError (message is undeserializable).
  */
 export function example8a(): void {
-  const worker = createResilientSubscriber<PaymentEvent>({
-    subscription: 'payments-worker',
-
-    // Pass the deadLetterPolicy configuration through to the native client.
-    // The dead-letter topic must already exist with the correct IAM grants.
-    deadLetterPolicy: {
-      deadLetterTopic: 'projects/my-project/topics/payments-dlq',
-      maxDeliveryAttempts: 5,
-    },
-
-    // Fires when a SerializationError is detected — message is unprocessable.
-    // The library nacks without retry; Pub/Sub routes to the dead-letter topic.
-    onPoison: (msg, err) => {
-      console.error('Poison message detected, routing to DLQ', {
-        messageId: msg.meta.messageId,
-        error: isResilientPubSubError(err) ? err.toJSON() : String(err),
-      });
-      // Do NOT throw here — the library already handles the nack.
-    },
-
-    // Fires when delivery_attempt reaches maxDeliveryAttempts.
-    // Pub/Sub will route this message to the dead-letter topic.
-    onDeadLetter: (msg) => {
-      console.error('Message exhausted delivery attempts — dead-lettered', {
-        messageId: msg.meta.messageId,
-        deliveryAttempt: msg.meta.deliveryAttempt,
-      });
-    },
-  });
+  const worker = createResilientSubscriber<PaymentEvent>(
+    withDeadLetter(
+      {
+        subscription: 'payments-worker',
+        hooks: {
+          // Fires when a SerializationError is detected — message is unprocessable.
+          // The library nacks without retry; Pub/Sub routes to the dead-letter topic.
+          onPoison: ({ messageId, error }) => {
+            console.error('Poison message detected, routing to DLQ', {
+              messageId,
+              error: isResilientPubSubError(error) ? error.toJSON() : String(error),
+            });
+            // Do NOT throw here — the library already handles the nack.
+          },
+        },
+      },
+      {
+        deadLetterTopic: 'projects/my-project/topics/payments-dlq',
+        maxDeliveryAttempts: 5,
+      }
+    )
+  );
 
   worker.on(async (msg) => {
     // deliveryAttempt is surfaced on meta when deadLetterPolicy is configured.
@@ -144,13 +136,15 @@ export function example8b(): void {
 export function example8c(): void {
   const worker = createResilientSubscriber<PaymentEvent>({
     subscription: 'payments-worker',
-    onPoison: (msg, err) => {
-      // Log the error safely — toJSON() excludes body, cause, and raw attributes.
-      console.error('Undeserializable message', {
-        messageId: msg.meta.messageId,
-        ...(isResilientPubSubError(err) ? err.toJSON() : { message: String(err) }),
-      });
-      // Emit a metric for monitoring poisoned message rates.
+    hooks: {
+      onPoison: ({ messageId, error }) => {
+        // Log the error safely — toJSON() excludes body, cause, and raw attributes.
+        console.error('Undeserializable message', {
+          messageId,
+          ...(isResilientPubSubError(error) ? error.toJSON() : { message: String(error) }),
+        });
+        // Emit a metric for monitoring poisoned message rates.
+      },
     },
   });
 

@@ -1,4 +1,4 @@
-import { A as Attributes, E as EnvelopeMeta } from '../index-BCwaxBg3.cjs';
+import { A as Attributes, E as EnvelopeMeta } from '../index-Da6vKBeR.cjs';
 export { J as JsonSerializer, S as Serializer } from '../serializer-DAvAnges.cjs';
 export { S as SerializationError } from '../error-D2Fc_HlK.cjs';
 import '../classify-mrmGdAaM.cjs';

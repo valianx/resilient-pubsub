@@ -16,38 +16,6 @@ export { C as Classification } from '../classify-mrmGdAaM.js';
  *
  * @module utils/redact
  */
-/**
- * Redacts known secret patterns from a free-text string.
- *
- * Rules applied in order:
- * 1. **Redis / Rediss URLs with credentials** — the userinfo component
- *    (everything between `://` and `@`) is replaced with `[REDACTED]@`.
- *    If URL parsing fails for any reason, the entire `redis[s]://...` token
- *    is redacted defensively.
- * 2. **PEM private-key blocks** (`-----BEGIN ... KEY-----` … `-----END ... KEY-----`).
- * 3. **`private_key` JSON field values** (GCP service-account objects logged
- *    as JSON snippets).
- * 4. **GCP keyfile path assignments** (e.g., `keyFile: '/path/to/sa.json'`).
- *
- * The function is conservative: overlapping matches are handled by applying
- * rules in order; the output is not guaranteed to be valid JSON or a valid
- * connection string after redaction.
- *
- * @param text - The input string to sanitize.
- * @returns The sanitized string with secrets replaced by `'[REDACTED]'`.
- *
- * @example Redis URL with credentials
- * ```ts
- * redactSecrets('redis://alice:s3cr3t@cache.internal:6379/0');
- * // → 'redis://[REDACTED]@cache.internal:6379/0'
- * ```
- *
- * @example GCP private key block
- * ```ts
- * redactSecrets('key: "-----BEGIN PRIVATE KEY-----\nMIIE...\n-----END PRIVATE KEY-----"');
- * // → 'key: "[REDACTED]"'
- * ```
- */
 declare function redactSecrets(text: string): string;
 /**
  * Returns a copy of `headers` with sensitive values replaced by `'[REDACTED]'`.

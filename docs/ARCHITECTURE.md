@@ -83,8 +83,7 @@ structural inspection with no cross-module imports.
   "./core":        { "import": "dist/core/index.js",        "require": "dist/core/index.cjs" },
   "./envelope":    { "import": "dist/envelope/index.js",    "require": "dist/envelope/index.cjs" },
   "./errors":      { "import": "dist/errors/index.js",      "require": "dist/errors/index.cjs" },
-  "./propagation": { "import": "dist/propagation/index.js", "require": "dist/propagation/index.cjs" },
-  "./idempotency": { "import": "dist/idempotency/index.js", "require": "dist/idempotency/index.cjs" }
+  "./propagation": { "import": "dist/propagation/index.js", "require": "dist/propagation/index.cjs" }
 }
 ```
 

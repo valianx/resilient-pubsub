@@ -1,4 +1,4 @@
-import { A as Attributes } from '../index-BCwaxBg3.js';
+import { A as Attributes } from '../index-Da6vKBeR.js';
 
 /**
  * Context and header propagation for resilient-pubsub.

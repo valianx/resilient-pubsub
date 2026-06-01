@@ -1,7 +1,7 @@
 import { a as BackoffStrategy, b as JitterStrategy } from '../jitter-WIUHHRu7.cjs';
 import { S as Serializer } from '../serializer-DAvAnges.cjs';
 import { Headers, PropagationOptions } from '../propagation/index.cjs';
-import { A as Attributes } from '../index-BCwaxBg3.cjs';
+import { A as Attributes } from '../index-Da6vKBeR.cjs';
 import { P as PubSubLike } from '../pubsub-h9anVIwg.cjs';
 export { T as TopicLike } from '../pubsub-h9anVIwg.cjs';
 

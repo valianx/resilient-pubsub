@@ -203,7 +203,11 @@ export class ResilientPubSubError extends Error {
    * ```
    */
   public toJSON(): Record<string, unknown> {
-    const safe = capMessage(redactSecrets(this.message));
+    // fix(security-m1): cap BEFORE redact — prevents ReDoS on large messages.
+    // PRIVATE_KEY_BLOCK_PATTERN has catastrophic backtracking on unterminated
+    // BEGIN KEY blocks; bounding the input to 512 chars first makes the regex
+    // run on a constant-size string, eliminating the O(N²) worst case.
+    const safe = redactSecrets(capMessage(this.message));
 
     const base: Record<string, unknown> = {
       name: this.name,
