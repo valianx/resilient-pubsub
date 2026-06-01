@@ -1,12 +1,11 @@
 export { PublishInput, PublishResult, PublisherHooks, PublisherOptions, PublisherRetryOptions, ResilientPublisher, createResilientPublisher } from './publisher/index.cjs';
 export { MessageHandler, ResilientSubscriber, SubscriberFlowControl, SubscriberHooks, SubscriberMessage, SubscriberOptions, createResilientSubscriber } from './subscriber/index.cjs';
-export { _idempotencyVersion } from './idempotency/index.cjs';
 export { DEAD_LETTER_IAM_REQUIREMENTS, DELIVERY_ATTEMPT_ATTRIBUTE, DeadLetterOptions, DeadLetterPolicy, SubscriptionOptions, buildDeadLetterPolicy, getDeliveryAttempt, withDeadLetter } from './dlq/index.cjs';
 export { B as BackoffOptions, a as BackoffStrategy, J as JitterOptions, b as JitterStrategy, c as applyJitter, d as calculateBackoff } from './jitter-WIUHHRu7.cjs';
 export { C as Classification, c as classify, i as isRetryable } from './classify-mrmGdAaM.cjs';
 export { Envelope, InboundPubSubMessage } from './envelope/index.cjs';
 export { J as JsonSerializer, S as Serializer } from './serializer-DAvAnges.cjs';
-export { A as Attributes, E as EnvelopeMeta } from './index-BCwaxBg3.cjs';
+export { A as Attributes, E as EnvelopeMeta } from './index-Da6vKBeR.cjs';
 export { E as ErrorKind, R as ResilientPubSubError, a as ResilientPubSubErrorOptions, S as SerializationError, i as isResilientPubSubError } from './error-D2Fc_HlK.cjs';
 export { capMessage, redactHeaders, redactSecrets } from './errors/index.cjs';
 export { Headers, PropagationOptions, W3C_TRACE_HEADERS, extractContext, injectContext } from './propagation/index.cjs';

@@ -1,4 +1,4 @@
-import { E as EnvelopeMeta } from '../index-BCwaxBg3.cjs';
+import { E as EnvelopeMeta } from '../index-Da6vKBeR.cjs';
 
 /**
  * Native dead-letter support for resilient-pubsub (opt-in, v0.1).

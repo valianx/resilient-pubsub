@@ -1,7 +1,7 @@
 import { S as Serializer } from '../serializer-DAvAnges.cjs';
 import { R as ResilientPubSubError } from '../error-D2Fc_HlK.cjs';
 import { Headers, PropagationOptions } from '../propagation/index.cjs';
-import { E as EnvelopeMeta } from '../index-BCwaxBg3.cjs';
+import { E as EnvelopeMeta } from '../index-Da6vKBeR.cjs';
 import { S as SubscriberFlowControlLike, a as SubscriberPubSubLike } from '../pubsub-h9anVIwg.cjs';
 export { A as AckableMessage, b as SubscriptionLike } from '../pubsub-h9anVIwg.cjs';
 import '../classify-mrmGdAaM.cjs';

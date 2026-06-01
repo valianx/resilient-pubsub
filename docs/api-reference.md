@@ -1,10 +1,8 @@
 # API Reference — resilient-pubsub
 
-> **Under active development — not ready for production use.**
->
-> Items marked *"v0.1, in progress"* describe the target API for the first
-> stable release. Items marked *"implemented"* are already in the codebase and
-> exercised by the test suite.
+> **Implemented.** All APIs documented here are implemented and exercised by
+> the test suite. The library is not yet published to npm (version 0.0.0,
+> pre-release); APIs are stable for v0.1.
 
 ## Table of contents
 
@@ -38,7 +36,7 @@
 
 ### `createResilientPublisher<T>(options)`
 
-> v0.1 — target API, implementation in progress. See [docs/VISION.md](VISION.md).
+> Implemented. See [docs/use-cases/01-quickstart-publisher.ts](use-cases/01-quickstart-publisher.ts).
 
 ```typescript
 import { createResilientPublisher } from 'resilient-pubsub';
@@ -61,7 +59,7 @@ or fail the request).
 
 ### `createResilientSubscriber<T>(options)`
 
-> v0.1 — target API, implementation in progress. See [docs/VISION.md](VISION.md).
+> Implemented. See [docs/use-cases/02-quickstart-subscriber.ts](use-cases/02-quickstart-subscriber.ts).
 
 ```typescript
 import { createResilientSubscriber } from 'resilient-pubsub';
@@ -71,7 +69,7 @@ import { createResilientSubscriber } from 'resilient-pubsub/subscriber';
 const worker = createResilientSubscriber<OrderCreated>({
   subscription: string;          // Required: Pub/Sub subscription name
   pubSubClient?: PubSub;         // Optional: inject an existing client
-  // deadLetterPolicy, flowControl, maxExtension, etc. — safe defaults
+  // serializer, propagation, flowControl, stopTimeoutMs, hooks — safe defaults
 });
 
 worker.on(async (msg: { body: T; headers: Record<string, string>; meta: EnvelopeMeta }) => {
@@ -310,36 +308,64 @@ retry concurrently:
 
 ## 6. Hooks & Observability
 
-> v0.1 — target API, wired into publisher and subscriber options. In progress.
-> See [docs/VISION.md](VISION.md) § "What this library is" (point 6).
+> Implemented. Hooks are nested under the `hooks` key in the options object.
+> See [docs/use-cases/01-quickstart-publisher.ts](use-cases/01-quickstart-publisher.ts)
+> and [docs/use-cases/02-quickstart-subscriber.ts](use-cases/02-quickstart-subscriber.ts).
 
 The library emits neutral lifecycle callbacks. Wire them to any observability
 backend (OpenTelemetry, Prometheus, winston, pino) without any SDK dependency.
 
-```typescript
-// Target v0.1 API (see docs/VISION.md) — hooks in progress.
-const publisher = createResilientPublisher({
-  topic: 'orders',
-  onRetry: (err, attempt, delayMs) => {
-    logger.warn('publish retry', { attempt, delayMs, kind: err.kind });
-  },
-});
+**Publisher hooks** — nested under `hooks: {}`, named-object params:
 
-const worker = createResilientSubscriber({
-  subscription: 'orders-worker',
-  onNack: (msg, err) => {
-    metrics.increment('pubsub.nack', { topic: msg.meta.messageId });
-  },
-  onPoison: (msg, err) => {
-    // SerializationError — message will not be retried; going to DLQ.
-    logger.error('poison message detected', err.toJSON());
-  },
-  onDeadLetter: (msg) => {
-    // Reached maxDeliveryAttempts — routed to the dead-letter topic.
-    alerting.fire('dead_letter', { messageId: msg.meta.messageId });
+```typescript
+const publisher = createResilientPublisher<OrderCreated>({
+  topic: 'orders',
+  hooks: {
+    // attempt: número de reintento (1-based); delay: ms a esperar; error: raw
+    onRetry: ({ attempt, delay, error }) => {
+      logger.warn('publish retry', { attempt, delay });
+    },
+    // messageId: ID asignado por el servidor en un publish exitoso
+    onPublish: ({ messageId }) => {
+      metrics.increment('publish.success');
+    },
   },
 });
 ```
+
+**Subscriber hooks** — nested under `hooks: {}`, named-object params:
+
+```typescript
+const worker = createResilientSubscriber<OrderCreated>({
+  subscription: 'orders-worker',
+  hooks: {
+    onAck: ({ messageId }) => metrics.increment('subscriber.ack'),
+    // error es un ResilientPubSubError (kind 'process' en fallo de handler,
+    // kind 'config' en fallo de bootstrap del cliente lazy)
+    onError: (error) => logger.error('handler failed', error.toJSON()),
+    onNack: ({ messageId, error }) => metrics.increment('subscriber.nack'),
+    // onPoison: deserialización falló — el handler NO se invoca, se nackea
+    onPoison: ({ messageId, error }) => logger.error('poison message', { messageId }),
+  },
+});
+```
+
+**Dead-letter queue (DLQ)** is configured with the builder from `resilient-pubsub/dlq`,
+not as a subscriber option. The `buildDeadLetterPolicy` / `withDeadLetter` helpers
+construct the native `deadLetterPolicy` and wire it to the subscription:
+
+```typescript
+import { withDeadLetter } from 'resilient-pubsub/dlq';
+
+const worker = createResilientSubscriber<OrderCreated>(
+  withDeadLetter(
+    { subscription: 'orders-worker' },
+    { deadLetterTopic: 'projects/my-project/topics/orders-dlq', maxDeliveryAttempts: 5 }
+  )
+);
+```
+
+See [docs/use-cases/08-dead-letter.ts](use-cases/08-dead-letter.ts) for the full dead-letter pattern.
 
 The library transports W3C trace context (see [Context propagation](#4-context-propagation))
 but does **not** create spans. Wire your own tracing in the hooks.

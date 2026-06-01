@@ -401,6 +401,102 @@ describe('redactSecrets — GCP private key', () => {
     const input = 'All systems nominal. Latency: 42ms.';
     assert.equal(redactSecrets(input), input);
   });
+
+  // fix(security-m1): ReDoS regression — unterminated BEGIN KEY block
+  // A payload with a -----BEGIN ... KEY----- prefix but no closing delimiter
+  // caused catastrophic backtracking in PRIVATE_KEY_BLOCK_PATTERN (O(N²)).
+  // Post-fix: redactSecrets caps input to MAX_REDACT_INPUT (8192) before
+  // applying regex rules, so the regex always runs on a bounded string.
+  test('completes in bounded time on a large unterminated private-key block (ReDoS regression)', () => {
+    const payload = '-----BEGIN PRIVATE KEY-----' + 'A'.repeat(100_000);
+    const start = performance.now();
+    const result = redactSecrets(payload);
+    const elapsed = performance.now() - start;
+
+    assert.ok(
+      elapsed < 50,
+      `redactSecrets must complete in < 50 ms on large unterminated block; took ${elapsed.toFixed(1)} ms`
+    );
+    // redactSecrets caps its input to MAX_REDACT_INPUT (8192), so output is bounded.
+    assert.ok(
+      result.length <= 8192,
+      `Output length must be bounded to MAX_REDACT_INPUT (got ${result.length})`
+    );
+    // The raw payload (100k chars) must not pass through unabridged.
+    assert.ok(
+      !result.includes('A'.repeat(8193)),
+      'Raw body beyond MAX_REDACT_INPUT must not appear in the output'
+    );
+  });
+
+  // fix(security-m1): order guard — cap-before-redact enforces correct behaviour.
+  // With the CORRECT order redactSecrets(capMessage(msg)):
+  //   capMessage first truncates a 560-char message to 512 chars.  The PEM block
+  //   starts at char 500, so only its header appears in the 512-char window and
+  //   there is NO closing delimiter → PRIVATE_KEY_BLOCK_PATTERN does not match →
+  //   the (truncated, non-functional) fragment passes through un-redacted.
+  // With the WRONG order capMessage(redactSecrets(msg)):
+  //   redactSecrets first processes the full 560-char message, finds the complete
+  //   PEM block (header + body + footer all within 8192-char cap), replaces it
+  //   with '[REDACTED]' → capMessage sees a 510-char result and does NOT truncate
+  //   → the output contains the literal string '[REDACTED]'.
+  // The test asserts the CORRECT order outcome: output does NOT contain '[REDACTED]'
+  // for that block (the fragment was truncated away, not redacted).
+  // If someone reverts the ordering to capMessage(redactSecrets(...)) or removes
+  // capMessage from toJSON() altogether, this test FAILS.
+  test('toJSON() caps before redacting — order is enforced (ReDoS order guard)', () => {
+    // 500 chars of filler, then a complete PEM block; total ≈ 560 chars.
+    const prefix = 'x'.repeat(500);
+    const pemBlock = '-----BEGIN PRIVATE KEY-----\nABC123\n-----END PRIVATE KEY-----';
+    const payload = prefix + pemBlock;
+
+    const err = new ResilientPubSubError(payload, { kind: 'publish' });
+    const json = err.toJSON();
+    const msg = json['message'] as string;
+
+    // With cap-before-redact: capMessage truncates to 512 first.
+    // The PEM block starts at char 500 → only 12 chars of its header fit before
+    // the ellipsis at position 511.  The regex cannot match without the closing
+    // delimiter → the word '[REDACTED]' never appears in the output.
+    assert.ok(
+      typeof msg === 'string' && msg.length <= 512,
+      `toJSON().message must be ≤ 512 chars (got ${msg?.length})`
+    );
+    assert.ok(
+      !msg.includes('[REDACTED]'),
+      `With cap-before-redact the truncated PEM fragment must NOT be replaced by [REDACTED]; ` +
+        `got: "${msg.slice(490)}"`
+    );
+    // Sanity: the filler prefix is present (message was not wiped entirely).
+    assert.ok(msg.startsWith('x'), 'filler prefix must be present in the capped message');
+  });
+
+  // fix(security-m1): toJSON() regression — the ORDER redactSecrets(capMessage(...))
+  // ensures that ResilientPubSubError.toJSON() never passes an unbounded message
+  // to redactSecrets. toJSON() output is always ≤ 512 chars.
+  test('toJSON() is bounded in time and length on a large unterminated key block (ReDoS regression)', () => {
+    const payload = '-----BEGIN PRIVATE KEY-----' + 'A'.repeat(100_000);
+    const err = new ResilientPubSubError(payload, { kind: 'publish' });
+    const start = performance.now();
+    const json = err.toJSON();
+    const elapsed = performance.now() - start;
+
+    assert.ok(
+      elapsed < 50,
+      `toJSON() must complete in < 50 ms on large unterminated block; took ${elapsed.toFixed(1)} ms`
+    );
+    const msg = json['message'] as string;
+    assert.ok(
+      typeof msg === 'string' && msg.length <= 512,
+      `toJSON().message must be ≤ 512 chars (got ${msg?.length})`
+    );
+    // The payload is 100k chars; after cap to 512 the full raw body (100k chars)
+    // cannot be present. Check that the message was indeed truncated.
+    assert.ok(
+      !msg.includes('A'.repeat(513)),
+      'toJSON().message must not contain the full oversized payload body'
+    );
+  });
 });
 
 // ============================================================================

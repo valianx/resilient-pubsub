@@ -1,8 +1,6 @@
 /**
  * 09-graceful-shutdown.ts
  *
- * // Target v0.1 API (see docs/VISION.md) — subscriber implementation in progress.
- *
  * Tool: subscriber.stop() — graceful drain wired to SIGTERM/SIGINT.
  *
  * Why graceful shutdown matters:
@@ -30,7 +28,6 @@
  *     drainTimeout = platform_sigkill_window - (2 s safety buffer)
  */
 
-// Target v0.1 API (see docs/VISION.md) — subscriber implementation in progress.
 import { createResilientSubscriber } from 'resilient-pubsub';
 
 // ---------------------------------------------------------------------------
@@ -152,7 +149,6 @@ export function example9c(): void {
  *
  * @example NestJS module provider
  * ```typescript
- * // Target v0.1 API (see docs/VISION.md) — in progress.
  * @Injectable()
  * class InvoiceWorkerService implements OnApplicationShutdown {
  *   private readonly worker = createResilientSubscriber<InvoiceEvent>({

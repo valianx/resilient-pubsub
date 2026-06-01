@@ -1,8 +1,6 @@
 /**
  * 01-quickstart-publisher.ts
  *
- * // Target v0.1 API (see docs/VISION.md) — publisher implementation in progress.
- *
  * Tool: createResilientPublisher — minimal publisher setup.
  *
  * Contract (v0.1 target):
@@ -23,7 +21,6 @@
  *   GOOGLE_APPLICATION_CREDENTIALS=...  (or use Workload Identity on GCP)
  */
 
-// Target v0.1 API (see docs/VISION.md) — publisher implementation in progress.
 import { createResilientPublisher } from 'resilient-pubsub';
 
 // ---------------------------------------------------------------------------

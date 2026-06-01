@@ -185,11 +185,12 @@ var REDIS_URL_PATTERN = /rediss?:\/\/([^@\s]+@)/gi;
 var GCP_KEYFILE_PATTERN = /(?:keyFile(?:name)?|credentialsFile|serviceAccountKey)\s*[:=]\s*["']?[^\s"',;)]+["']?/gi;
 var PRIVATE_KEY_BLOCK_PATTERN = /-----BEGIN [A-Z ]+KEY-----[\s\S]*?-----END [A-Z ]+KEY-----/g;
 var PRIVATE_KEY_FIELD_PATTERN = /"private_key"\s*:\s*"[^"]+"/g;
+var MAX_REDACT_INPUT = 8192;
 function redactSecrets(text) {
-  let result = text;
+  let result = text.length > MAX_REDACT_INPUT ? text.slice(0, MAX_REDACT_INPUT) : text;
   result = result.replace(REDIS_URL_PATTERN, (match, userinfo) => {
     try {
-      const urlStr = match.endsWith(userinfo) ? match : match;
+      const urlStr = match;
       const withoutUserinfo = match.replace(userinfo, `${REDACTED}@`);
       const scheme = urlStr.startsWith("rediss") ? "rediss://" : "redis://";
       const hostPart = withoutUserinfo.slice(scheme.length).replace(`${REDACTED}@`, "");
@@ -263,7 +264,7 @@ var ResilientPubSubError = class extends (_b = Error, _a = BRAND, _b) {
    * ```
    */
   toJSON() {
-    const safe = capMessage(redactSecrets(this.message));
+    const safe = redactSecrets(capMessage(this.message));
     const base = {
       name: this.name,
       kind: this.kind,
@@ -800,9 +801,6 @@ function createResilientSubscriber(opts) {
   };
 }
 
-// src/idempotency/index.ts
-var _idempotencyVersion = "0.0.0";
-
 // src/dlq/dlq.ts
 var DELIVERY_ATTEMPT_ATTRIBUTE = "googclient_deliveryattempt";
 var DEAD_LETTER_IAM_REQUIREMENTS = "The Pub/Sub service account service-{PROJECT_NUMBER}@gcp-sa-pubsub.iam.gserviceaccount.com requires (1) roles/pubsub.publisher on the dead-letter topic and (2) roles/pubsub.subscriber on the source subscription. IAM preflight validation is deferred to v0.2.";
@@ -845,6 +843,6 @@ function validateMaxDeliveryAttempts(attempts) {
   }
 }
 
-export { DEAD_LETTER_IAM_REQUIREMENTS, DELIVERY_ATTEMPT_ATTRIBUTE, ENV_BACKOFF_STRATEGY, ENV_INITIAL_DELAY, ENV_JITTER, ENV_MAX_ATTEMPTS, ENV_MAX_BYTES, ENV_MAX_DELAY, ENV_MAX_MESSAGES, ENV_MULTIPLIER, ENV_STOP_TIMEOUT_MS, Envelope, JsonSerializer, ResilientPubSubError, SerializationError, W3C_TRACE_HEADERS, _idempotencyVersion, _resetDefaultClientCache, applyJitter, buildDeadLetterPolicy, calculateBackoff, capMessage, classify, createResilientPublisher, createResilientSubscriber, extractContext, getDefaultPubSubClient, getDeliveryAttempt, injectContext, isResilientPubSubError, isRetryable, redactHeaders, redactSecrets, resolveConfigFromEnv, withDeadLetter };
+export { DEAD_LETTER_IAM_REQUIREMENTS, DELIVERY_ATTEMPT_ATTRIBUTE, ENV_BACKOFF_STRATEGY, ENV_INITIAL_DELAY, ENV_JITTER, ENV_MAX_ATTEMPTS, ENV_MAX_BYTES, ENV_MAX_DELAY, ENV_MAX_MESSAGES, ENV_MULTIPLIER, ENV_STOP_TIMEOUT_MS, Envelope, JsonSerializer, ResilientPubSubError, SerializationError, W3C_TRACE_HEADERS, _resetDefaultClientCache, applyJitter, buildDeadLetterPolicy, calculateBackoff, capMessage, classify, createResilientPublisher, createResilientSubscriber, extractContext, getDefaultPubSubClient, getDeliveryAttempt, injectContext, isResilientPubSubError, isRetryable, redactHeaders, redactSecrets, resolveConfigFromEnv, withDeadLetter };
 //# sourceMappingURL=index.js.map
 //# sourceMappingURL=index.js.map

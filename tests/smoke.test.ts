@@ -12,12 +12,16 @@
  * exports in PR-5 (createResilientPublisher, PublisherOptions, etc.).
  * NOTE: _subscriberVersion removed — subscriber placeholder replaced by real
  * exports in PR-6 (createResilientSubscriber, SubscriberOptions, etc.).
+ * NOTE: _idempotencyVersion removed — idempotency/redis stubs removed from the
+ * public surface in pre-release-review-fixes; deferred to v0.2.
  */
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-test('root barrel re-exports the sub-module placeholders', async () => {
+test('root barrel loads without throwing', async () => {
   const mod = await import('../src/index.ts');
-  assert.equal(mod._idempotencyVersion, '0.0.0');
+  // The barrel re-exports real modules; verify at least one known export is present.
+  assert.ok(typeof mod.createResilientPublisher === 'function', 'createResilientPublisher must be exported');
+  assert.ok(typeof mod.createResilientSubscriber === 'function', 'createResilientSubscriber must be exported');
 });

@@ -1,8 +1,6 @@
 /**
  * 10-deployment-patterns.ts
  *
- * // Target v0.1 API (see docs/VISION.md) — publisher/subscriber implementation in progress.
- *
  * Tools: deployment patterns — publisher-only / consumer-only / both;
  *        subpath imports for tree-shaking; shared PubSub client.
  *
@@ -32,7 +30,6 @@
 // Pattern 1: Publisher-only app.
 // ---------------------------------------------------------------------------
 
-// Target v0.1 API (see docs/VISION.md) — publisher implementation in progress.
 import { createResilientPublisher } from 'resilient-pubsub/publisher';
 
 interface OrderCreated {
@@ -67,7 +64,6 @@ export async function patternPublisherOnly(): Promise<void> {
 // Pattern 2: Consumer-only app.
 // ---------------------------------------------------------------------------
 
-// Target v0.1 API (see docs/VISION.md) — subscriber implementation in progress.
 import { createResilientSubscriber } from 'resilient-pubsub/subscriber';
 
 /**

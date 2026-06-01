@@ -1,12 +1,11 @@
 export { PublishInput, PublishResult, PublisherHooks, PublisherOptions, PublisherRetryOptions, ResilientPublisher, createResilientPublisher } from './publisher/index.js';
 export { MessageHandler, ResilientSubscriber, SubscriberFlowControl, SubscriberHooks, SubscriberMessage, SubscriberOptions, createResilientSubscriber } from './subscriber/index.js';
-export { _idempotencyVersion } from './idempotency/index.js';
 export { DEAD_LETTER_IAM_REQUIREMENTS, DELIVERY_ATTEMPT_ATTRIBUTE, DeadLetterOptions, DeadLetterPolicy, SubscriptionOptions, buildDeadLetterPolicy, getDeliveryAttempt, withDeadLetter } from './dlq/index.js';
 export { B as BackoffOptions, a as BackoffStrategy, J as JitterOptions, b as JitterStrategy, c as applyJitter, d as calculateBackoff } from './jitter-WIUHHRu7.js';
 export { C as Classification, c as classify, i as isRetryable } from './classify-mrmGdAaM.js';
 export { Envelope, InboundPubSubMessage } from './envelope/index.js';
 export { J as JsonSerializer, S as Serializer } from './serializer-DAvAnges.js';
-export { A as Attributes, E as EnvelopeMeta } from './index-BCwaxBg3.js';
+export { A as Attributes, E as EnvelopeMeta } from './index-Da6vKBeR.js';
 export { E as ErrorKind, R as ResilientPubSubError, a as ResilientPubSubErrorOptions, S as SerializationError, i as isResilientPubSubError } from './error-BUmovVYN.js';
 export { capMessage, redactHeaders, redactSecrets } from './errors/index.js';
 export { Headers, PropagationOptions, W3C_TRACE_HEADERS, extractContext, injectContext } from './propagation/index.js';

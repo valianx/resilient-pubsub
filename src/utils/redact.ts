@@ -129,15 +129,23 @@ const PRIVATE_KEY_FIELD_PATTERN = /"private_key"\s*:\s*"[^"]+"/g;
  * // → 'key: "[REDACTED]"'
  * ```
  */
+/** Maximum input length accepted by redactSecrets before applying regex rules.
+ * Defensive cap so any direct caller also gets bounded regex execution.
+ * @internal */
+const MAX_REDACT_INPUT = 8192;
+
 export function redactSecrets(text: string): string {
-  let result = text;
+  // fix(security-m1): defensive input cap — guards against ReDoS from any
+  // call site, not just toJSON(). PRIVATE_KEY_BLOCK_PATTERN is O(N²) on
+  // unterminated BEGIN blocks; keeping the input ≤ 8 KB bounds the regex cost.
+  let result = text.length > MAX_REDACT_INPUT ? text.slice(0, MAX_REDACT_INPUT) : text;
 
   // Rule 1 — Redis/Rediss URLs: redact userinfo (user:pass@) segment.
   result = result.replace(REDIS_URL_PATTERN, (match, userinfo: string) => {
     // Attempt URL-parse to ensure we are replacing only the credential part.
     // The URL constructor requires a valid base; wrap with a dummy scheme if needed.
     try {
-      const urlStr = match.endsWith(userinfo) ? match : match;
+      const urlStr = match;
       // Rebuild without the userinfo block.
       const withoutUserinfo = match.replace(userinfo, `${REDACTED}@`);
       // Validate that the remainder still looks like a URL (parse must not throw).
